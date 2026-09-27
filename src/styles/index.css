@@ -1,0 +1,480 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── tokens ─────────────────────────────────────────────────────────── */
+:root {
+  /* colour */
+  --ink-950:   #14100E;
+  --ink-700:   #4A403A;
+  --ink-500:   #7A6E64;
+  --ink-300:   #B2A69B;
+  --paper:     #F6F2EA;
+  --paper-2:   #EFE9DC;
+  --paper-3:   #E7DFCC;
+  --rule:      #D8CFBE;
+  --rule-ink:  #B2A69B;
+  --gold-700:  #8E6A20;
+  --gold-500:  #B8892E;
+  --gold-100:  #EED9A6;
+  --rose-700:  #7C1F1F;
+  --rose-500:  #A02C2C;
+  --moss-600:  #4A6B3A;
+  --amber-500: #C0821E;
+
+  /* legacy aliases so we don't have to migrate every screen at once */
+  --bg:        var(--paper);
+  --bg-panel:  var(--paper-2);
+  --bg-hover:  var(--paper-3);
+  --border:    var(--rule);
+  --text:      var(--ink-950);
+  --text-mute: var(--ink-500);
+  --accent:    var(--gold-700);
+  --success:   var(--moss-600);
+  --warn:      var(--amber-500);
+  --danger:    var(--rose-500);
+  --gold:      var(--gold-500);
+
+  /* fonts */
+  --font-ui:      'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* radius */
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 6px;
+
+  /* motion */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast:   120ms;
+  --dur-normal: 180ms;
+}
+
+/* ─── base ───────────────────────────────────────────────────────────── */
+html, body, #root { height: 100%; }
+
+body {
+  background: var(--paper);
+  color: var(--ink-950);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tabular figures on every numeric surface */
+.mono,
+input[type="number"],
+.tabular {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum', 'zero';
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Selection uses the gold accent */
+::selection { background: var(--gold-100); color: var(--ink-950); }
+
+/* Focus ring — instant, no blur, pure gold */
+:focus-visible {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 0;
+  transition: none;
+}
+
+/* Reduced motion respect */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* ─── component classes ──────────────────────────────────────────────── */
+@layer components {
+
+  /* Inputs — 32px, hairline, no shadow. Focus swaps to gold border + ring. */
+  .input {
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    background: #FFFDF7;
+    color: var(--ink-950);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 30px;
+    transition: border-color var(--dur-fast) var(--ease-out-expo),
+                background-color var(--dur-fast) var(--ease-out-expo);
+  }
+  .input:hover:not(:disabled) { border-color: var(--ink-300); }
+  .input:focus,
+  .input:focus-visible {
+    outline: 2px solid var(--gold-500);
+    outline-offset: 0;
+    border-color: var(--gold-500);
+    background: #FFFEF9;
+  }
+  .input:disabled {
+    background: var(--paper-2);
+    color: var(--ink-500);
+    cursor: not-allowed;
+  }
+  input.input[type="number"],
+  input.input.mono,
+  select.input {
+    font-family: var(--font-mono);
+    font-feature-settings: 'tnum', 'zero';
+  }
+  select.input {
+    padding-right: 22px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ink-500) 50%),
+                      linear-gradient(-45deg, transparent 50%, var(--ink-500) 50%);
+    background-position: calc(100% - 12px) 14px, calc(100% - 8px) 14px;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  /* Buttons — no shadow, hairline border, keyboard chip on the right */
+  .btn,
+  .btn-primary,
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: var(--r-md);
+    border: 1px solid var(--ink-950);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out-expo),
+                color var(--dur-fast) var(--ease-out-expo);
+    user-select: none;
+  }
+  .btn {
+    background: var(--paper);
+    color: var(--ink-950);
+  }
+  .btn:hover:not(:disabled) { background: var(--paper-3); }
+  .btn-primary {
+    background: var(--ink-950);
+    color: var(--paper);
+  }
+  .btn-primary:hover:not(:disabled) { background: #26201C; }
+  .btn-ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink-700);
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--paper-2); }
+  .btn:disabled, .btn-primary:disabled, .btn-ghost:disabled {
+    opacity: 0.5; cursor: not-allowed;
+  }
+
+  /* Keyboard-shortcut chip that lives inside a button */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 5px;
+    margin-left: auto;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--ink-500);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+  .btn-primary .kbd { border-color: rgba(246, 242, 234, 0.35); color: rgba(246, 242, 234, 0.8); }
+
+  /* Text link — the underline is the key */
+  .link {
+    color: var(--gold-700);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+    text-decoration-color: var(--gold-100);
+    transition: text-decoration-color var(--dur-fast) var(--ease-out-expo);
+  }
+  .link:hover { text-decoration-color: var(--gold-500); }
+  .link:disabled { color: var(--ink-500); text-decoration-color: transparent; cursor: not-allowed; }
+  .link.text-danger { color: var(--rose-500); text-decoration-color: rgba(160, 44, 44, 0.25); }
+  .link.text-danger:hover { text-decoration-color: var(--rose-500); }
+
+  /* Section label — Fraunces italic small caps, letterspaced */
+  .section-label {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-variant: small-caps;
+    letter-spacing: 0.14em;
+    color: var(--ink-500);
+    font-size: 12px;
+  }
+
+  /* Card / panel with hairline border */
+  .card {
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    padding: 16px;
+  }
+
+  /* Screen heading — the "Sale" / "Purchase" title */
+  .screen-title {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 26px;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    color: var(--ink-950);
+  }
+
+  /* Table styling — 32px rows, hairline separators, small-caps header */
+  .ledger-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .ledger-table thead th {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-variant: small-caps;
+    letter-spacing: 0.1em;
+    font-size: 11px;
+    color: var(--ink-500);
+    text-align: left;
+    padding: 8px 8px 6px;
+    border-bottom: 1px solid var(--rule-ink);
+  }
+  .ledger-table tbody td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: middle;
+  }
+  .ledger-table tbody tr:hover td { background: var(--paper-3); }
+  .ledger-table tbody tr:last-child td { border-bottom: 0; }
+  .ledger-table .num { text-align: right; font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+
+  /* Totals block — the torn-ledger receipt treatment */
+  .totals {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 24px;
+    row-gap: 4px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: var(--ink-700);
+  }
+  .totals dt { text-align: left; color: var(--ink-500); }
+  .totals dd { text-align: right; font-family: var(--font-mono); font-feature-settings: 'tnum'; margin: 0; color: var(--ink-950); }
+  .totals .rule {
+    grid-column: 1 / -1;
+    height: 1px;
+    background: var(--rule);
+    margin: 4px 0;
+  }
+  .totals .rule-double {
+    grid-column: 1 / -1;
+    height: 4px;
+    border-top: 1px solid var(--rule-ink);
+    border-bottom: 1px solid var(--rule-ink);
+    margin: 6px 0;
+  }
+  .totals .grand-label {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-950);
+  }
+  .totals .grand-value {
+    font-family: var(--font-mono);
+    font-feature-settings: 'tnum';
+    font-size: 20px;
+    color: var(--ink-950);
+    letter-spacing: -0.01em;
+  }
+  .totals .warn { color: var(--rose-500); }
+  .totals .ok   { color: var(--moss-600); }
+
+  /* Status dot — the ● indicators in the header */
+  .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: var(--ink-300);
+    vertical-align: middle;
+  }
+  .dot-ok    { background: var(--moss-600); }
+  .dot-warn  { background: var(--amber-500); }
+  .dot-err   { background: var(--rose-500); }
+  .dot-gold  { background: var(--gold-500); }
+
+  /* Sidebar item */
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 14px 0 18px;
+    color: var(--ink-700);
+    font-size: 13px;
+    letter-spacing: 0.01em;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    width: 100%;
+    cursor: pointer;
+    position: relative;
+    transition: color var(--dur-fast) var(--ease-out-expo),
+                background-color var(--dur-fast) var(--ease-out-expo);
+  }
+  .nav-item svg { flex-shrink: 0; opacity: 0.75; }
+  .nav-item:hover { color: var(--ink-950); background: var(--paper-3); }
+  .nav-item:hover svg { opacity: 1; }
+  .nav-item[data-active="true"] {
+    color: var(--ink-950);
+    font-weight: 500;
+    background: transparent;
+  }
+  .nav-item[data-active="true"] svg {
+    opacity: 1;
+    color: var(--gold-700);
+  }
+  .nav-item[data-active="true"]::before {
+    content: '';
+    position: absolute;
+    left: 6px; top: 50%;
+    width: 4px; height: 4px;
+    border-radius: 999px;
+    background: var(--gold-500);
+    transform: translateY(-50%);
+  }
+  .nav-item .kbd {
+    margin-left: auto;
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink-300);
+  }
+
+  /* Tabs — used in Ledgers, Karigar, Reports */
+  .tabs {
+    display: flex;
+    gap: 20px;
+    border-bottom: 1px solid var(--rule-ink);
+  }
+  .tab {
+    padding: 8px 0 10px;
+    margin-bottom: -1px;
+    border: 0;
+    background: transparent;
+    color: var(--ink-500);
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color var(--dur-fast) var(--ease-out-expo),
+                border-color var(--dur-fast) var(--ease-out-expo);
+  }
+  .tab:hover { color: var(--ink-700); }
+  .tab[data-active="true"] {
+    color: var(--ink-950);
+    border-bottom-color: var(--gold-500);
+  }
+
+  /* Header brand mark */
+  .brand {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+    color: var(--ink-950);
+  }
+
+  /* Status bar footer — the always-on shop telemetry */
+  .statusbar {
+    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 16px;
+    background: var(--paper-2);
+    border-top: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-feature-settings: 'tnum';
+    font-size: 11px;
+    color: var(--ink-500);
+  }
+  .statusbar .sep { color: var(--rule-ink); }
+
+  /* Error banner — hairline rose */
+  .errbox {
+    border: 1px solid var(--rose-500);
+    background: #FBEEEE;
+    color: var(--rose-700);
+    font-size: 12px;
+    padding: 8px 12px;
+    border-radius: var(--r-md);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .errbox button { color: var(--rose-500); background: transparent; border: 0; cursor: pointer; }
+
+  /* Loading bar — indeterminate gold sweep, used above tables */
+  .loadbar {
+    height: 2px;
+    width: 100%;
+    background: var(--paper-2);
+    overflow: hidden;
+    position: relative;
+  }
+  .loadbar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, var(--gold-500), transparent);
+    animation: sweep 1.1s var(--ease-out-expo) infinite;
+    width: 40%;
+    transform: translateX(-100%);
+  }
+  @keyframes sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+  }
+
+  /* Inline spinner for buttons */
+  .spinner {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 999px;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+}

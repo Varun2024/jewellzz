@@ -1,0 +1,46 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build outputs
+dist/
+dist-electron/
+build/
+out/
+release/
+
+# logs / debug
+*.log
+npm-debug.log*
+pnpm-debug.log*
+debug.log
+.debug/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# local SQLite (Electron writes to %APPDATA%\jewelzz anyway)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-*
+
+# ad-hoc artifacts
+invoices/
+exports/
+backups/

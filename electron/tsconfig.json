@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "../dist-electron",
+    "rootDir": "..",
+    "sourceMap": true,
+    "types": ["node"],
+    "baseUrl": "..",
+    "paths": {
+      "@db/*": ["db/*"],
+      "@shared/*": ["shared/*"]
+    }
+  },
+  "include": ["../electron", "../shared", "../db", "../scripts"]
+}
