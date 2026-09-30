@@ -2,6 +2,8 @@ import type Database from 'better-sqlite3';
 import { getDb } from './db';
 import { postSale, postPurchase } from './txn';
 import { postKarigarIssue, postKarigarReceipt, payKarigar } from './karigar';
+import { createApproval, resolveApproval, createRepair, updateRepairStatus, deliverRepair, createOrder, receiveOrderAdvance, updateOrderStatus } from './pipelines';
+import { sendRefiningLot, receiveRefiningLot, cancelRefiningLot } from './refining';
 import { runBackupNow } from './backup';
 import { printSaleInvoice } from './print';
 import { writeCsvSales, writeCsvPurchases } from './export';
@@ -393,6 +395,220 @@ export async function runSmokeTest(): Promise<{ steps: SmokeStep[]; passed: numb
     return `out=${row.out}`;
   });
 
+  // ── approval / repair / order pipelines
+  let approvalId = 0, repairId = 0, orderId = 0;
+
+  await step('approval: create with 1 gold item then return (stock restored)', () => {
+    // baseline stock
+    const before = db.prepare('SELECT stock_qty, stock_wt_mg FROM items WHERE id = ?').get(items.gold) as any;
+    const r = createApproval(db, {
+      partyId: customerId,
+      promisedReturnDate: '2026-10-15',
+      notes: 'smoke approval',
+      lines: [{ itemId: items.gold, category: 'gold', stamp: '22k', qty: 1, weightMg: 5000, note: '' }],
+    });
+    approvalId = r.id;
+    const mid = db.prepare('SELECT stock_qty, stock_wt_mg FROM items WHERE id = ?').get(items.gold) as any;
+    if (mid.stock_qty !== before.stock_qty - 1 || mid.stock_wt_mg !== before.stock_wt_mg - 5000) {
+      throw new Error(`stock not decremented: before ${JSON.stringify(before)} mid ${JSON.stringify(mid)}`);
+    }
+    resolveApproval(db, { id: r.id, status: 'returned' });
+    const after = db.prepare('SELECT stock_qty, stock_wt_mg FROM items WHERE id = ?').get(items.gold) as any;
+    if (after.stock_qty !== before.stock_qty || after.stock_wt_mg !== before.stock_wt_mg) {
+      throw new Error(`stock not restored: before ${JSON.stringify(before)} after ${JSON.stringify(after)}`);
+    }
+    return `${r.slipNo} returned, stock restored`;
+  });
+
+  await step('approval: create + resolve as sold (stock stays out)', () => {
+    const before = db.prepare('SELECT stock_qty FROM items WHERE id = ?').get(items.gold) as any;
+    const r = createApproval(db, {
+      partyId: customerId,
+      promisedReturnDate: '',
+      notes: '',
+      lines: [{ itemId: items.gold, category: 'gold', stamp: '22k', qty: 1, weightMg: 5000, note: '' }],
+    });
+    resolveApproval(db, { id: r.id, status: 'sold' });
+    const after = db.prepare('SELECT stock_qty FROM items WHERE id = ?').get(items.gold) as any;
+    if (after.stock_qty !== before.stock_qty - 1) throw new Error('sold approval should leave stock decremented');
+    return `${r.slipNo} sold`;
+  });
+
+  await step('repair: create → in_progress → ready → deliver with cash', () => {
+    const r = createRepair(db, {
+      partyId: customerId,
+      description: 'smoke repair — clasp fix',
+      customerMaterialCategory: 'gold',
+      customerMaterialStamp: '22k',
+      customerMaterialWeightMg: 3000,
+      karigarId: null,
+      additionPaise: 0,
+      labourPaise: 100000,   // ₹1,000
+      promisedDate: '2026-10-10',
+      notes: '',
+    });
+    repairId = r.id;
+    updateRepairStatus(db, { id: r.id, status: 'in_progress' });
+    updateRepairStatus(db, { id: r.id, status: 'ready' });
+    const res = deliverRepair(db, { id: r.id, paidCashPaise: 100000, paidBankPaise: 0 });
+    if (res.balancePaise !== 0) throw new Error(`balance ${res.balancePaise} expected 0`);
+    return `${r.slipNo} delivered, balance 0`;
+  });
+
+  await step('repair: cash ledger got ₹1000 debit for repair', () => {
+    const row = db.prepare(
+      `SELECT SUM(debit_paise) AS inP FROM cash_ledger WHERE ref_type='repair' AND ref_id=?`,
+    ).get(repairId) as any;
+    if (row.inP !== 100000) throw new Error(`cash in ${row.inP}, expected 100000`);
+    return `+${row.inP} paise`;
+  });
+
+  await step('order: create → advance ₹5000 → start → ready → delivered', () => {
+    const r = createOrder(db, {
+      partyId: customerId,
+      spec: 'smoke test 22k ring 8g',
+      estimatedPaise: 5000000,   // ₹50,000
+      karigarId: null,
+      promisedDate: '2026-10-20',
+      notes: '',
+    });
+    orderId = r.id;
+    const a = receiveOrderAdvance(db, { id: r.id, amountPaise: 500000 });
+    if (a.advanceTotalPaise !== 500000) throw new Error(`advance ${a.advanceTotalPaise} expected 500000`);
+    updateOrderStatus(db, { id: r.id, status: 'in_progress' });
+    updateOrderStatus(db, { id: r.id, status: 'ready' });
+    updateOrderStatus(db, { id: r.id, status: 'delivered' });
+    return `${r.slipNo} delivered with ₹5000 advance`;
+  });
+
+  await step('order: advance wrote cash + party ledger rows', () => {
+    const cash = db.prepare(
+      `SELECT SUM(debit_paise) AS inP FROM cash_ledger WHERE ref_type='order_advance' AND ref_id=?`,
+    ).get(orderId) as any;
+    if (cash.inP !== 500000) throw new Error(`cash in ${cash.inP}, expected 500000`);
+    const pl = db.prepare(
+      `SELECT SUM(credit) AS c FROM party_ledger WHERE ref_type='order_advance' AND ref_id=?`,
+    ).get(orderId) as any;
+    if (pl.c !== 500000) throw new Error(`party credit ${pl.c}, expected 500000`);
+    return `cash +${cash.inP} party credit +${pl.c}`;
+  });
+
+  // ── refining: send 50g gold-22k scrap, receive 48g pure 24k (2g loss = 4%)
+  let refiningId = 0;
+  await step('refining: send 50g gold-22k to refiner', () => {
+    const r = sendRefiningLot(db, {
+      refinerPartyId: supplierId,
+      sentCategory: 'gold',
+      sentStamp: '22k',
+      sentWeightMg: 50000,
+      notes: 'smoke refining',
+    });
+    refiningId = r.id;
+    return `${r.slipNo}`;
+  });
+
+  await step('refining: metal ledger shows -50g gold-22k on send', () => {
+    const row = db.prepare(
+      `SELECT SUM(credit_mg) AS out FROM metal_ledger WHERE ref_type='refining_send' AND ref_id=?`,
+    ).get(refiningId) as any;
+    if (row.out !== 50000) throw new Error(`expected -50000mg, got ${row.out}`);
+    return `-${row.out}mg`;
+  });
+
+  await step('refining: party ledger shows refiner owes 50g metal on send', () => {
+    const row = db.prepare(
+      `SELECT SUM(debit) AS d FROM party_ledger WHERE ref_type='refining_send' AND ref_id=? AND kind='metal'`,
+    ).get(refiningId) as any;
+    if (row.d !== 50000) throw new Error(`expected debit 50000, got ${row.d}`);
+    return `debit ${row.d}mg`;
+  });
+
+  await step('refining: receive 48g pure 24k + ₹1000 charges, ₹500 paid', () => {
+    const r = receiveRefiningLot(db, {
+      id: refiningId,
+      receivedCategory: 'gold',
+      receivedStamp: '24k',
+      receivedWeightMg: 48000,
+      chargesPaise: 100000,
+      paidCashPaise: 50000,
+    });
+    if (r.lossMg !== 2000) throw new Error(`loss ${r.lossMg}mg expected 2000`);
+    if (r.chargesBalancePaise !== 50000) throw new Error(`charges balance ${r.chargesBalancePaise} expected 50000`);
+    return `loss=${r.lossMg}mg, charges balance=${r.chargesBalancePaise}`;
+  });
+
+  await step('refining: metal ledger got +48g gold-24k on receive', () => {
+    const row = db.prepare(
+      `SELECT SUM(debit_mg) AS inMg FROM metal_ledger WHERE ref_type='refining_receive' AND ref_id=? AND category='gold' AND stamp='24k'`,
+    ).get(refiningId) as any;
+    if (row.inMg !== 48000) throw new Error(`expected +48000mg, got ${row.inMg}`);
+    return `+${row.inMg}mg`;
+  });
+
+  await step('refining: refiner metal debt settled to zero (party_ledger)', () => {
+    const row = db.prepare(
+      `SELECT SUM(debit)-SUM(credit) AS bal FROM party_ledger WHERE party_id=? AND kind='metal' AND category='gold' AND stamp='22k'`,
+    ).get(supplierId) as any;
+    if ((row.bal ?? 0) !== 0) throw new Error(`bal=${row.bal} expected 0`);
+    return 'settled';
+  });
+
+  await step('refining: cash ledger has ₹500 charges out + party owes ₹500', () => {
+    const cash = db.prepare(
+      `SELECT SUM(credit_paise) AS out FROM cash_ledger WHERE ref_type='refining_charges' AND ref_id=?`,
+    ).get(refiningId) as any;
+    if (cash.out !== 50000) throw new Error(`cash out ${cash.out} expected 50000`);
+    const pl = db.prepare(
+      `SELECT SUM(credit) AS c FROM party_ledger WHERE ref_type='refining_charges' AND ref_id=? AND kind='cash'`,
+    ).get(refiningId) as any;
+    if (pl.c !== 50000) throw new Error(`party credit ${pl.c} expected 50000`);
+    return `cash -${cash.out}, party owes ${pl.c}`;
+  });
+
+  await step('refining: guard rejects double-receipt', () => {
+    try {
+      receiveRefiningLot(db, {
+        id: refiningId, receivedCategory: 'gold', receivedStamp: '24k',
+        receivedWeightMg: 1000, chargesPaise: 0, paidCashPaise: 0,
+      });
+      throw new Error('should have rejected already-received lot');
+    } catch (e: any) {
+      if (!/already/i.test(e.message)) throw e;
+      return 'rejected';
+    }
+  });
+
+  await step('refining: cancel of another lot restores metal', () => {
+    const cancelLot = sendRefiningLot(db, {
+      refinerPartyId: supplierId,
+      sentCategory: 'silver',
+      sentStamp: '925',
+      sentWeightMg: 20000,
+      notes: 'to cancel',
+    });
+    const before = db.prepare(
+      `SELECT SUM(debit_mg)-SUM(credit_mg) AS bal FROM metal_ledger WHERE category='silver' AND stamp='925'`,
+    ).get() as any;
+    cancelRefiningLot(db, cancelLot.id);
+    const after = db.prepare(
+      `SELECT SUM(debit_mg)-SUM(credit_mg) AS bal FROM metal_ledger WHERE category='silver' AND stamp='925'`,
+    ).get() as any;
+    if ((after.bal ?? 0) - (before.bal ?? 0) !== 20000) {
+      throw new Error(`silver not restored: before=${before.bal} after=${after.bal}`);
+    }
+    return `restored 20000mg`;
+  });
+
+  await step('pipeline guard: repair cannot be delivered twice', () => {
+    try {
+      deliverRepair(db, { id: repairId, paidCashPaise: 100, paidBankPaise: 0 });
+      throw new Error('should have rejected double-delivery');
+    } catch (e: any) {
+      if (!/already delivered/i.test(e.message)) throw e;
+      return 'rejected as expected';
+    }
+  });
+
   // ── print + exports + backup
   await step('print: A5 invoice PDF written', async () => {
     const r = await printSaleInvoice(db, saleId);
@@ -473,9 +689,14 @@ export async function runSmokeTest(): Promise<{ steps: SmokeStep[]; passed: numb
       db.prepare(`DELETE FROM sales WHERE party_id IN (${parties.join(',')})`).run();
       db.prepare(`DELETE FROM purchase_items WHERE purchase_id IN (SELECT id FROM purchases WHERE party_id IN (${parties.join(',')}))`).run();
       db.prepare(`DELETE FROM purchases WHERE party_id IN (${parties.join(',')})`).run();
-      db.prepare(`DELETE FROM cash_ledger WHERE party_id IN (${parties.join(',')}) OR ref_type='karigar_pay'`).run();
-      db.prepare(`DELETE FROM metal_ledger WHERE party_id IN (${parties.join(',')}) OR ref_type IN ('karigar_issue','karigar_receipt')`).run();
+      db.prepare(`DELETE FROM cash_ledger WHERE party_id IN (${parties.join(',')}) OR ref_type IN ('karigar_pay','repair','order_advance','refining_charges')`).run();
+      db.prepare(`DELETE FROM metal_ledger WHERE party_id IN (${parties.join(',')}) OR ref_type IN ('karigar_issue','karigar_receipt','refining_send','refining_receive','refining_cancel')`).run();
       db.prepare(`DELETE FROM party_ledger WHERE party_id IN (${parties.join(',')})`).run();
+      db.prepare(`DELETE FROM approval_items WHERE approval_id IN (SELECT id FROM approvals WHERE party_id IN (${parties.join(',')}))`).run();
+      db.prepare(`DELETE FROM approvals WHERE party_id IN (${parties.join(',')})`).run();
+      db.prepare(`DELETE FROM repairs WHERE party_id IN (${parties.join(',')})`).run();
+      db.prepare(`DELETE FROM orders WHERE party_id IN (${parties.join(',')})`).run();
+      db.prepare(`DELETE FROM refining_lots WHERE refiner_party_id IN (${parties.join(',')})`).run();
       db.prepare(`DELETE FROM stock_adjustments WHERE item_id IN (${itemIds.join(',')})`).run();
       if (karigars.length) {
         db.prepare(`DELETE FROM karigar_ledger WHERE karigar_id IN (${karigars.join(',')})`).run();
