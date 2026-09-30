@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// ponytail: no drizzle-kit for phase 0 — sql files + version table. Swap in kit if migrations get complex.
+// ponytail: sql files + version table. Simple enough that a schema-DSL never earned its keep.
 
 function migrationsDir(): string {
   // At runtime this file may live in dist-electron/db/. Fall back to source dir in dev.

@@ -3,6 +3,7 @@ import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { runMigrations, seedIfEmpty } from '../db/migrator';
+import { ensureOwner } from './auth';
 
 let db: Database.Database | null = null;
 
@@ -20,6 +21,7 @@ export function openDb(): Database.Database {
   db.pragma('synchronous = NORMAL');
   runMigrations(db);
   seedIfEmpty(db);
+  ensureOwner(db);
   return db;
 }
 

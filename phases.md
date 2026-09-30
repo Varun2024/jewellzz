@@ -44,10 +44,12 @@
 
 3. [x] Karigar module (issue/receive/ledger + labour payment)
 4. [x] GST reports (GSTR-1 per-(invoice,rate) B2B/B2C, GSTR-3B summary, HSN summary — inline views + CSV exports)
-5. [ ] Approval, repair, order
-6. [ ] Refining
-7. [ ] Tagging + cataloging
-8. [ ] Multi-company + user roles
+4b. [x] Settings + metal rates (Company details + daily gold/silver rates per stamp; auto-fill on sale + purchase; live status bar)
+5. [x] Approval, repair, order — 3-tab Jobs screen (Kanban icon); stateful slips with status pipelines; approvals affect stock, repairs + orders touch ledgers on delivery/advance
+6. [x] Refining — Recycle icon; send scrap → receive purified w/ loss + charges; contra-reversible cancel; refining loss absorbed by shop (visible in metal_ledger net)
+7. [x] Tagging + cataloging — Catalog grid screen (Images icon); `photo://` custom protocol for local file loads; item detail modal with photos + collections + comma-tags editors; A4 label sheet with Code-128 barcodes via bwip-js + pdfkit (3×8 grid, 24 per page, bulk-select from catalog)
+8a. [x] User roles + PIN auth — `users` table + scrypt-hashed PINs; owner seeded (PIN `1234`); PIN LoginScreen boot gate; role gate whitelist on 20+ owner-only channels (settings edits, deletes, exports, backup, karigar pay, refining, labels); audit_log actor = current user; Users card in Settings; current user + sign-out in status bar.
+8b. [ ] Multi-company — deferred (single-shop MVP doesn't need it). Would require `company_id` FK on nearly every row + a company switcher. Revisit when a real second-shop customer asks.
 9. [ ] E-way bill JSON export
 10. [ ] Bill format editor
 
