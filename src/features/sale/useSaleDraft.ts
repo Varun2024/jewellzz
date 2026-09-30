@@ -23,7 +23,21 @@ export type DraftLine = {
   gstPct: number;
 };
 
-export function makeDraftLine(it: Item): DraftLine {
+// rate lookup keyed as `${category}|${stamp}` → rate ₹/g (rupees, not paise)
+export type RateMap = Record<string, number>;
+
+function lookupRate(rates: RateMap | undefined, it: Item): number {
+  if (!rates || !it.stamp) return 0;
+  const perG = rates[`${it.category}|${it.stamp}`];
+  if (!perG) return 0;
+  // gms items: rate is per gram already. carat items: ₹/g × 0.2 = ₹/ct.
+  // pcs items: no auto rate (per-pcs pricing is item-specific).
+  if (it.unit === 'gms') return perG;
+  if (it.unit === 'carat') return perG * 0.2;
+  return 0;
+}
+
+export function makeDraftLine(it: Item, rates?: RateMap): DraftLine {
   return {
     key: `${it.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     itemId: it.id,
@@ -34,7 +48,7 @@ export function makeDraftLine(it: Item): DraftLine {
     hsn: it.hsn,
     qty: it.unit === 'pcs' ? 1 : 0,
     weight: 0,
-    ratePerUnit: 0,
+    ratePerUnit: lookupRate(rates, it),
     makingMode: it.labourMode,
     makingValue: it.labourMode === 'pct' ? it.labourValue / 100 : it.labourValue / 100,
     wastageMode: it.wastageMode,
@@ -114,7 +128,7 @@ export const EMPTY_DRAFT: Draft = {
   notes: '',
 };
 
-export function useSaleDraft(companyStateCode: string) {
+export function useSaleDraft(companyStateCode: string, rates?: RateMap) {
   const [d, setD] = useState<Draft>(EMPTY_DRAFT);
 
   const interstate = !!(companyStateCode && d.partyStateCode && companyStateCode !== d.partyStateCode);
@@ -134,7 +148,7 @@ export function useSaleDraft(companyStateCode: string) {
   }, [d, interstate]);
 
   function reset() { setD(EMPTY_DRAFT); }
-  function addLine(it: Item) { setD((d) => ({ ...d, lines: [...d.lines, makeDraftLine(it)] })); }
+  function addLine(it: Item) { setD((d) => ({ ...d, lines: [...d.lines, makeDraftLine(it, rates)] })); }
   function updLine(key: string, patch: Partial<DraftLine>) {
     setD((d) => ({ ...d, lines: d.lines.map((l) => (l.key === key ? { ...l, ...patch } : l)) }));
   }

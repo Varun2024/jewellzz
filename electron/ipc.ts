@@ -4,7 +4,19 @@ import { getDb } from './db';
 import { runBackupNow } from './backup';
 import { postSale, postPurchase } from './txn';
 import { postKarigarIssue, postKarigarReceipt, payKarigar, listKarigarBalances, readKarigarLedger } from './karigar';
+import {
+  createApproval, resolveApproval,
+  createRepair, updateRepairStatus, deliverRepair,
+  createOrder, receiveOrderAdvance, updateOrderStatus,
+} from './pipelines';
+import { sendRefiningLot, receiveRefiningLot, cancelRefiningLot } from './refining';
+import { addPhotos, listItemPhotos, deletePhoto, setPrimaryPhoto, catalogGrid } from './photos';
+import { printLabels } from './labels';
 import { printSaleInvoice } from './print';
+import {
+  whoami, login, logout, listActiveUsers, listAllUsers,
+  createUser, setUserPin, deactivateUser, assertRole, currentActor,
+} from './auth';
 import {
   CH,
   PartyInput,
@@ -18,12 +30,22 @@ import {
   KarigarIssueInput,
   KarigarReceiptInput,
   KarigarPayInput,
+  MetalRateInput,
+  ApprovalInput, ApprovalResolve,
+  RepairInput, RepairDeliver, RepairStatusUpdate,
+  OrderInput, OrderAdvance, OrderStatusUpdate,
+  RefiningSend, RefiningReceive,
   type Party,
   type Item,
   type SearchHit,
 } from '../shared/ipc';
 
-// Small helper: wrap a handler with a zod schema so bad input becomes a clean rejection.
+// Channels that skip the auth gate (login flow, whoami before user picks account, cheap health probe).
+const OPEN_CHANNELS: ReadonlySet<string> = new Set([
+  'auth.list', 'auth.whoami', 'auth.login', 'app.ping',
+]);
+
+// Small helper: wrap a handler with zod validation + role gate.
 function on<S extends z.ZodTypeAny, R>(
   ipc: IpcMain,
   channel: string,
@@ -31,6 +53,7 @@ function on<S extends z.ZodTypeAny, R>(
   fn: (input: z.infer<S>) => R,
 ): void {
   ipc.handle(channel, (_e, payload) => {
+    if (!OPEN_CHANNELS.has(channel)) assertRole(channel);
     const input = schema ? schema.parse(payload) : (payload as z.infer<S>);
     return fn(input);
   });
@@ -46,9 +69,10 @@ function audit(
   getDb()
     .prepare(
       `INSERT INTO audit_log (actor, entity, entity_id, action, before, after)
-       VALUES ('operator', ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(
+      currentActor(),
       entity,
       entityId,
       action,
@@ -108,6 +132,41 @@ function toFtsQuery(q: string): string {
 }
 
 export function registerIpc(ipc: IpcMain): void {
+  // ───────── auth (must come before role-gated channels)
+  on(ipc, CH.authListUsers, null, () => listActiveUsers(getDb()));
+  on(ipc, CH.authWhoami, null, () => whoami());
+  on(
+    ipc,
+    CH.authLogin,
+    z.object({ userId: z.number().int(), pin: z.string().min(4).max(8) }),
+    ({ userId, pin }) => login(getDb(), userId, pin),
+  );
+  on(ipc, CH.authLogout, null, () => { logout(); return { ok: true }; });
+
+  on(ipc, 'users.list' as string, null, () => listAllUsers(getDb()));
+  on(
+    ipc,
+    CH.usersCreate,
+    z.object({ name: z.string().min(1).max(60), role: z.enum(['owner', 'counter']), pin: z.string().regex(/^\d{4,8}$/) }),
+    (p) => {
+      const r = createUser(getDb(), p);
+      audit('user', r.id, 'create', null, { name: p.name, role: p.role });
+      return r;
+    },
+  );
+  on(
+    ipc,
+    CH.usersSetPin,
+    z.object({ id: z.number().int(), pin: z.string().regex(/^\d{4,8}$/) }),
+    ({ id, pin }) => { setUserPin(getDb(), id, pin); audit('user', id, 'pin_change', null, null); return { ok: true }; },
+  );
+  on(
+    ipc,
+    CH.usersDeactivate,
+    z.object({ id: z.number().int() }),
+    ({ id }) => { deactivateUser(getDb(), id); audit('user', id, 'deactivate', null, null); return { ok: true }; },
+  );
+
   // ───────── health + backup
   on(ipc, CH.ping, null, () => ({ ok: true, ts: Date.now() }));
   on(ipc, CH.backupNow, null, () => runBackupNow());
@@ -552,6 +611,250 @@ export function registerIpc(ipc: IpcMain): void {
     return readKarigarLedger(getDb(), karigarId);
   });
   on(ipc, CH.karigarBalances, null, () => listKarigarBalances(getDb()));
+
+  // ───────── metal rates (Settings)
+  const mapRate = (r: any) => ({
+    id: r.id, category: r.category, stamp: r.stamp,
+    ratePaisePerG: r.rate_paise_per_g,
+    updatedAt: r.updated_at, updatedBy: r.updated_by,
+  });
+  on(ipc, CH.ratesList, null, () => {
+    return getDb().prepare(
+      `SELECT * FROM metal_rates ORDER BY category, stamp`,
+    ).all().map(mapRate);
+  });
+  on(ipc, CH.ratesUpsert, MetalRateInput, (p) => {
+    const db = getDb();
+    const existing = db.prepare(
+      `SELECT * FROM metal_rates WHERE category = ? AND stamp = ?`,
+    ).get(p.category, p.stamp);
+    const row = db.prepare(
+      `INSERT INTO metal_rates (category, stamp, rate_paise_per_g, updated_at, updated_by)
+       VALUES (@category, @stamp, @ratePaisePerG, unixepoch(), 'operator')
+       ON CONFLICT(category, stamp) DO UPDATE SET
+         rate_paise_per_g = excluded.rate_paise_per_g,
+         updated_at = unixepoch(),
+         updated_by = 'operator'
+       RETURNING *`,
+    ).get(p);
+    audit('metal_rate', (row as any).id, existing ? 'update' : 'insert', existing, row);
+    return mapRate(row);
+  });
+  on(ipc, CH.ratesDelete, z.object({ id: z.number().int() }), ({ id }) => {
+    const db = getDb();
+    const before = db.prepare('SELECT * FROM metal_rates WHERE id = ?').get(id);
+    if (!before) return { ok: false };
+    db.prepare('DELETE FROM metal_rates WHERE id = ?').run(id);
+    audit('metal_rate', id, 'delete', before, null);
+    return { ok: true };
+  });
+
+  // ───────── approval / repair / order pipelines
+  on(ipc, CH.approvalCreate, ApprovalInput, (p) => {
+    const r = createApproval(getDb(), p);
+    audit('approval', r.id, 'create', null, r);
+    return r;
+  });
+  on(ipc, CH.approvalResolve, ApprovalResolve, (p) => {
+    const r = resolveApproval(getDb(), p);
+    audit('approval', p.id, `resolve:${p.status}`, null, r);
+    return r;
+  });
+  on(ipc, CH.approvalsList, z.object({ status: z.string().optional() }).default({}), ({ status }) => {
+    const db = getDb();
+    const where = status ? 'WHERE a.status = ?' : '';
+    const args = status ? [status] : [];
+    return db.prepare(
+      `SELECT a.id, a.slip_no as slipNo, a.ts, a.party_id as partyId, p.name as partyName,
+              a.promised_return_date as promisedReturnDate, a.status, a.notes,
+              a.resolved_at as resolvedAt, a.resolved_sale_id as resolvedSaleId,
+              (SELECT COUNT(*) FROM approval_items WHERE approval_id = a.id) as itemCount,
+              (SELECT SUM(qty) FROM approval_items WHERE approval_id = a.id) as totalQty,
+              (SELECT SUM(weight_mg) FROM approval_items WHERE approval_id = a.id) as totalMg
+       FROM approvals a JOIN parties p ON p.id = a.party_id
+       ${where}
+       ORDER BY a.ts DESC LIMIT 200`,
+    ).all(...args);
+  });
+
+  on(ipc, CH.repairCreate, RepairInput, (p) => {
+    const r = createRepair(getDb(), p);
+    audit('repair', r.id, 'create', null, r);
+    return r;
+  });
+  on(ipc, CH.repairStatus, RepairStatusUpdate, (p) => {
+    const r = updateRepairStatus(getDb(), p);
+    audit('repair', p.id, `status:${p.status}`, null, r);
+    return r;
+  });
+  on(ipc, CH.repairDeliver, RepairDeliver, (p) => {
+    const r = deliverRepair(getDb(), p);
+    audit('repair', p.id, 'deliver', null, r);
+    return r;
+  });
+  on(ipc, CH.repairsList, z.object({ status: z.string().optional() }).default({}), ({ status }) => {
+    const db = getDb();
+    const where = status ? 'WHERE r.status = ?' : '';
+    const args = status ? [status] : [];
+    return db.prepare(
+      `SELECT r.id, r.slip_no as slipNo, r.ts, r.party_id as partyId, p.name as partyName,
+              r.description, r.customer_material_category as customerMaterialCategory,
+              r.customer_material_stamp as customerMaterialStamp,
+              r.customer_material_weight_mg as customerMaterialWeightMg,
+              r.karigar_id as karigarId, k.name as karigarName,
+              r.addition_paise as additionPaise, r.labour_paise as labourPaise,
+              r.total_paise as totalPaise, r.balance_paise as balancePaise,
+              r.paid_cash_paise as paidCashPaise, r.paid_bank_paise as paidBankPaise,
+              r.promised_date as promisedDate, r.status, r.delivered_at as deliveredAt, r.notes
+       FROM repairs r
+       JOIN parties p ON p.id = r.party_id
+       LEFT JOIN karigars k ON k.id = r.karigar_id
+       ${where}
+       ORDER BY r.ts DESC LIMIT 200`,
+    ).all(...args);
+  });
+
+  on(ipc, CH.orderCreate, OrderInput, (p) => {
+    const r = createOrder(getDb(), p);
+    audit('order', r.id, 'create', null, r);
+    return r;
+  });
+  on(ipc, CH.orderAdvance, OrderAdvance, (p) => {
+    const r = receiveOrderAdvance(getDb(), p);
+    audit('order', p.id, 'advance', null, r);
+    return r;
+  });
+  on(ipc, CH.orderStatus, OrderStatusUpdate, (p) => {
+    const r = updateOrderStatus(getDb(), p);
+    audit('order', p.id, `status:${p.status}`, null, r);
+    return r;
+  });
+  on(ipc, CH.ordersList, z.object({ status: z.string().optional() }).default({}), ({ status }) => {
+    const db = getDb();
+    const where = status ? 'WHERE o.status = ?' : '';
+    const args = status ? [status] : [];
+    return db.prepare(
+      `SELECT o.id, o.slip_no as slipNo, o.ts, o.party_id as partyId, p.name as partyName,
+              o.spec, o.estimated_paise as estimatedPaise, o.advance_paise as advancePaise,
+              o.karigar_id as karigarId, k.name as karigarName,
+              o.promised_date as promisedDate, o.status, o.delivered_at as deliveredAt,
+              o.resolved_sale_id as resolvedSaleId, o.notes
+       FROM orders o
+       JOIN parties p ON p.id = o.party_id
+       LEFT JOIN karigars k ON k.id = o.karigar_id
+       ${where}
+       ORDER BY o.ts DESC LIMIT 200`,
+    ).all(...args);
+  });
+
+  // ───────── refining
+  on(ipc, CH.refiningSend, RefiningSend, (p) => {
+    const r = sendRefiningLot(getDb(), p);
+    audit('refining', r.id, 'send', null, r);
+    return r;
+  });
+  on(ipc, CH.refiningReceive, RefiningReceive, (p) => {
+    const r = receiveRefiningLot(getDb(), p);
+    audit('refining', p.id, 'receive', null, r);
+    return r;
+  });
+  on(ipc, CH.refiningCancel, z.object({ id: z.number().int() }), ({ id }) => {
+    const r = cancelRefiningLot(getDb(), id);
+    audit('refining', id, 'cancel', null, r);
+    return r;
+  });
+  on(ipc, CH.refiningList, z.object({ status: z.string().optional() }).default({}), ({ status }) => {
+    const db = getDb();
+    const where = status ? 'WHERE r.status = ?' : '';
+    const args = status ? [status] : [];
+    return db.prepare(
+      `SELECT r.id, r.slip_no as slipNo, r.ts, r.refiner_party_id as refinerPartyId, p.name as refinerName,
+              r.sent_category as sentCategory, r.sent_stamp as sentStamp, r.sent_weight_mg as sentWeightMg,
+              r.received_category as receivedCategory, r.received_stamp as receivedStamp,
+              r.received_weight_mg as receivedWeightMg, r.loss_mg as lossMg,
+              r.charges_paise as chargesPaise, r.paid_cash_paise as paidCashPaise,
+              r.charges_balance_paise as chargesBalancePaise,
+              r.status, r.received_at as receivedAt, r.notes
+       FROM refining_lots r JOIN parties p ON p.id = r.refiner_party_id
+       ${where}
+       ORDER BY r.ts DESC LIMIT 200`,
+    ).all(...args);
+  });
+
+  // ───────── catalog: photos + collections + tags + labels
+  on(ipc, CH.photosList, z.object({ itemId: z.number().int() }), ({ itemId }) => {
+    return listItemPhotos(getDb(), itemId);
+  });
+  on(ipc, CH.photosAdd, z.object({ itemId: z.number().int() }), async ({ itemId }) => {
+    const r = await addPhotos(getDb(), itemId);
+    audit('item_photo', itemId, 'add', null, r);
+    return r;
+  });
+  on(ipc, CH.photosDelete, z.object({ id: z.number().int() }), ({ id }) => {
+    const r = deletePhoto(getDb(), id);
+    audit('item_photo', id, 'delete', null, r);
+    return r;
+  });
+  on(ipc, CH.photosSetPrimary, z.object({ id: z.number().int() }), ({ id }) => {
+    return setPrimaryPhoto(getDb(), id);
+  });
+
+  on(ipc, CH.catalogGrid, z.object({
+    q: z.string().optional(),
+    collectionId: z.number().int().optional(),
+  }).default({}), (opts) => {
+    return catalogGrid(getDb(), opts);
+  });
+
+  on(ipc, CH.collectionsList, null, () => {
+    return getDb().prepare(
+      `SELECT c.id, c.name, c.description, c.created_at as createdAt,
+              (SELECT COUNT(*) FROM item_collections WHERE collection_id = c.id) AS itemCount
+       FROM collections c ORDER BY c.name`,
+    ).all();
+  });
+  on(ipc, CH.collectionsCreate, z.object({ name: z.string().min(1).max(80), description: z.string().default('') }), (p) => {
+    const row = getDb().prepare(
+      `INSERT INTO collections (name, description) VALUES (?, ?) RETURNING *`,
+    ).get(p.name.trim(), p.description);
+    audit('collection', (row as any).id, 'create', null, row);
+    return row;
+  });
+  on(ipc, CH.collectionsDelete, z.object({ id: z.number().int() }), ({ id }) => {
+    getDb().prepare('DELETE FROM collections WHERE id = ?').run(id);
+    audit('collection', id, 'delete', null, null);
+    return { ok: true };
+  });
+
+  on(ipc, CH.itemCollectionsGet, z.object({ itemId: z.number().int() }), ({ itemId }) => {
+    return getDb().prepare(
+      `SELECT c.id, c.name FROM collections c
+       JOIN item_collections ic ON ic.collection_id = c.id WHERE ic.item_id = ? ORDER BY c.name`,
+    ).all(itemId);
+  });
+  on(ipc, CH.itemCollectionsSet, z.object({ itemId: z.number().int(), collectionIds: z.array(z.number().int()) }), ({ itemId, collectionIds }) => {
+    const db = getDb();
+    db.transaction(() => {
+      db.prepare('DELETE FROM item_collections WHERE item_id = ?').run(itemId);
+      const insert = db.prepare('INSERT INTO item_collections (item_id, collection_id) VALUES (?, ?)');
+      for (const cid of collectionIds) insert.run(itemId, cid);
+    })();
+    audit('item_collections', itemId, 'set', null, { collectionIds });
+    return { ok: true };
+  });
+
+  on(ipc, CH.itemTagsSet, z.object({ itemId: z.number().int(), tags: z.string().max(500) }), ({ itemId, tags }) => {
+    getDb().prepare('UPDATE items SET tags = ?, updated_at = unixepoch() WHERE id = ?').run(tags.trim(), itemId);
+    audit('item', itemId, 'tags', null, { tags });
+    return { ok: true };
+  });
+
+  on(ipc, CH.labelsPrint, z.object({
+    itemIds: z.array(z.number().int()).min(1),
+    copies: z.number().int().min(1).max(50).default(1),
+  }), async (p) => {
+    return printLabels(getDb(), p);
+  });
 
   // ───────── dev smoke test
   on(ipc, CH.devSmoke, null, async () => {

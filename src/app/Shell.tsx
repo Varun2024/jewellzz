@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
   Receipt, ShoppingBag, Package, BookOpen, Users, Tag, Hammer,
-  ChartLineUp, FloppyDisk, Wrench, Lightbulb, X,
+  ChartLineUp, FloppyDisk, Wrench, Lightbulb, X, GearSix, Kanban, Recycle, Images,
 } from '@phosphor-icons/react';
+import { CH, invoke } from '@/lib/ipc';
+import { fmtPaise } from '@/lib/format';
+import type { MetalRate } from '@shared/ipc';
 import { PartiesScreen } from '@/features/parties/PartiesScreen';
 import { ItemsScreen } from '@/features/items/ItemsScreen';
 import { StockScreen } from '@/features/stock/StockScreen';
@@ -14,6 +17,10 @@ import { ReportsScreen } from '@/features/reports/ReportsScreen';
 import { BackupScreen } from '@/features/backup/BackupScreen';
 import { DevScreen } from '@/features/dev/DevScreen';
 import { SearchBar } from '@/features/search/SearchBar';
+import { SettingsScreen } from '@/features/settings/SettingsScreen';
+import { JobsScreen } from '@/features/jobs/JobsScreen';
+import { RefiningScreen } from '@/features/refining/RefiningScreen';
+import { CatalogScreen } from '@/features/catalog/CatalogScreen';
 import { LogoMark, Wordmark } from '@/components/Logo';
 
 const NAV = [
@@ -23,17 +30,41 @@ const NAV = [
   { key: 'ledgers',  label: 'Ledgers',  shortcut: 'F5',  icon: BookOpen },
   { key: 'parties',  label: 'Parties',  shortcut: 'F6',  icon: Users },
   { key: 'items',    label: 'Items',    shortcut: 'F7',  icon: Tag },
+  { key: 'catalog',  label: 'Catalog',  shortcut: '',    icon: Images },
   { key: 'karigar',  label: 'Karigar',  shortcut: 'F8',  icon: Hammer },
+  { key: 'refining', label: 'Refining', shortcut: '',    icon: Recycle },
+  { key: 'jobs',     label: 'Jobs',     shortcut: '',    icon: Kanban },
   { key: 'reports',  label: 'Reports',  shortcut: 'F12', icon: ChartLineUp },
+  { key: 'settings', label: 'Settings', shortcut: '',    icon: GearSix },
   { key: 'backup',   label: 'Backup',   shortcut: 'F10', icon: FloppyDisk },
   { key: 'dev',      label: 'Dev',      shortcut: 'F11', icon: Wrench },
 ] as const;
 
 type NavKey = (typeof NAV)[number]['key'];
 
-export function Shell({ status }: { status: string }) {
+interface CurrentUser { id: number; name: string; role: 'owner' | 'counter' }
+
+export function Shell({ status, me, onLogout }: { status: string; me: CurrentUser; onLogout: () => void }) {
   const [active, setActive] = useState<NavKey>('sale');
   const [hintOpen, setHintOpen] = useState(() => localStorage.getItem('jewelzz.hint.dismissed') !== '1');
+  const [rates, setRates] = useState<Record<string, number>>({});
+
+  // Load rates once on mount; refresh when Settings screen is closed (naive: on interval).
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const r = await invoke<MetalRate[]>(CH.ratesList);
+        if (!alive) return;
+        const m: Record<string, number> = {};
+        for (const x of r) m[`${x.category}|${x.stamp}`] = x.ratePaisePerG;
+        setRates(m);
+      } catch { /* status bar can stay dashed */ }
+    }
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   const time  = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
@@ -82,7 +113,7 @@ export function Shell({ status }: { status: string }) {
               >
                 <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
                 <span>{n.label}</span>
-                <span className="kbd">{n.shortcut}</span>
+                {n.shortcut && <span className="kbd">{n.shortcut}</span>}
               </button>
             );
           })}
@@ -141,12 +172,31 @@ export function Shell({ status }: { status: string }) {
         <footer className="statusbar">
           <span><span className="dot dot-ok" /> IPC {status.startsWith('ok') ? 'ok' : status}</span>
           <span className="sep">·</span>
-          <span>Backup 0h ago</span>
+          <span>
+            Au22k <span className="text-[var(--gold-700)]">
+              {rates['gold|22k'] ? fmtPaise(rates['gold|22k']) + '/g' : '—'}
+            </span>
+          </span>
           <span className="sep">·</span>
-          <span>Au22k <span className="text-[var(--gold-700)]">—</span></span>
-          <span className="sep">·</span>
-          <span>Ag925 <span className="text-[var(--gold-700)]">—</span></span>
-          <span className="ml-auto text-[var(--ink-300)]">press / to search · F2–F12 to navigate</span>
+          <span>
+            Ag925 <span className="text-[var(--gold-700)]">
+              {rates['silver|925'] ? fmtPaise(rates['silver|925']) + '/g' : '—'}
+            </span>
+          </span>
+          <span className="ml-auto flex items-center gap-2">
+            <span className="text-[var(--ink-500)]">
+              <span className={me.role === 'owner' ? 'text-[var(--gold-700)]' : ''}>{me.name}</span>
+              <span className="text-[var(--ink-300)]"> · {me.role}</span>
+            </span>
+            <button
+              className="link"
+              style={{ fontSize: 11 }}
+              onClick={onLogout}
+              title="sign out"
+            >
+              sign out
+            </button>
+          </span>
         </footer>
       </div>
     </div>
@@ -161,8 +211,12 @@ function Screen({ area }: { area: NavKey }) {
     case 'ledgers':  return <LedgersScreen />;
     case 'parties':  return <PartiesScreen />;
     case 'items':    return <ItemsScreen />;
+    case 'catalog':  return <CatalogScreen />;
     case 'karigar':  return <KarigarScreen />;
+    case 'refining': return <RefiningScreen />;
+    case 'jobs':     return <JobsScreen />;
     case 'reports':  return <ReportsScreen />;
+    case 'settings': return <SettingsScreen />;
     case 'backup':   return <BackupScreen />;
     case 'dev':      return <DevScreen />;
     default:         return null;

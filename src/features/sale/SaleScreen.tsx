@@ -3,13 +3,14 @@ import { CH, invoke } from '@/lib/ipc';
 import { useMutation, errText } from '@/lib/useAsync';
 import { fmtPaise } from '@/lib/format';
 import { ErrorBanner, Spinner, LoadingBlock } from '@/components/Status';
-import type { Item, Party, SearchHit, SalePosted } from '@shared/ipc';
-import { useSaleDraft } from './useSaleDraft';
+import type { Item, Party, SearchHit, SalePosted, MetalRate } from '@shared/ipc';
+import { useSaleDraft, type RateMap } from './useSaleDraft';
 
 export function SaleScreen() {
   const [companyStateCode, setCompanyStateCode] = useState('');
   const [items, setItems] = useState<Item[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
+  const [rates, setRates] = useState<RateMap>({});
   const [partyQ, setPartyQ] = useState('');
   const [partyHits, setPartyHits] = useState<Party[]>([]);
   const [itemQ, setItemQ] = useState('');
@@ -26,18 +27,22 @@ export function SaleScreen() {
 
   const {
     draft, setDraft, addLine, updLine, delLine, reset, totals, interstate, toPayload,
-  } = useSaleDraft(companyStateCode);
+  } = useSaleDraft(companyStateCode, rates);
 
   useEffect(() => {
     (async () => {
       try {
-        const [co, its, ps] = await Promise.all([
+        const [co, its, ps, rs] = await Promise.all([
           invoke<any>(CH.companyGet),
           invoke<Item[]>(CH.itemsList),
           invoke<Party[]>(CH.partiesList),
+          invoke<MetalRate[]>(CH.ratesList),
         ]);
         if (co?.state_code) setCompanyStateCode(co.state_code);
         setItems(its); setParties(ps);
+        const rateMap: RateMap = {};
+        for (const r of rs) rateMap[`${r.category}|${r.stamp}`] = r.ratePaisePerG / 100;
+        setRates(rateMap);
         setTimeout(() => partyInputRef.current?.focus(), 50);
       } catch (e) {
         setBootErr(errText(e));

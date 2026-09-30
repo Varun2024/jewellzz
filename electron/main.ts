@@ -1,8 +1,14 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import path from 'node:path';
 import { openDb, closeDb } from './db';
 import { registerIpc } from './ipc';
 import { startBackupScheduler, stopBackupScheduler } from './backup';
+import { registerPhotoProtocol } from './photos';
+
+// Register photo:// as a privileged, standard, secure custom protocol so <img> loads work.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'photo', privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } },
+]);
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -34,6 +40,7 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   openDb();
+  registerPhotoProtocol();
   registerIpc(ipcMain);
   startBackupScheduler();
   await createWindow();

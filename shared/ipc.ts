@@ -255,6 +255,129 @@ export const KarigarPayInput = z.object({
 export type KarigarPayInput = z.infer<typeof KarigarPayInput>;
 
 // ────────────────────────────────────────────────────────────
+// Approval / Repair / Order pipelines
+// ────────────────────────────────────────────────────────────
+export const ApprovalStatus = z.enum(['open', 'sold', 'returned', 'cancelled']);
+export const RepairStatus = z.enum(['received', 'in_progress', 'ready', 'delivered', 'cancelled']);
+export const OrderStatus = z.enum(['open', 'in_progress', 'ready', 'delivered', 'cancelled']);
+
+export const ApprovalLine = z.object({
+  itemId: z.number().int(),
+  category: ItemCategory,
+  stamp: z.string().nullable(),
+  qty: z.number().int().min(0).default(0),
+  weightMg: z.number().int().min(0).default(0),
+  note: z.string().default(''),
+});
+export type ApprovalLine = z.infer<typeof ApprovalLine>;
+
+export const ApprovalInput = z.object({
+  partyId: z.number().int(),
+  promisedReturnDate: z.string().default(''),
+  notes: z.string().default(''),
+  lines: z.array(ApprovalLine).min(1),
+});
+export type ApprovalInput = z.infer<typeof ApprovalInput>;
+
+export const ApprovalResolve = z.object({
+  id: z.number().int(),
+  status: z.enum(['sold', 'returned', 'cancelled']),
+  resolvedSaleId: z.number().int().optional().nullable(),
+});
+export type ApprovalResolve = z.infer<typeof ApprovalResolve>;
+
+export const RepairInput = z.object({
+  partyId: z.number().int(),
+  description: z.string().min(1).max(500),
+  customerMaterialCategory: z.enum(['gold', 'silver', 'stone', 'artificial']).optional().nullable(),
+  customerMaterialStamp: z.string().optional().nullable(),
+  customerMaterialWeightMg: z.number().int().min(0).default(0),
+  karigarId: z.number().int().optional().nullable(),
+  additionPaise: z.number().int().min(0).default(0),
+  labourPaise: z.number().int().min(0).default(0),
+  promisedDate: z.string().default(''),
+  notes: z.string().default(''),
+});
+export type RepairInput = z.infer<typeof RepairInput>;
+
+export const RepairDeliver = z.object({
+  id: z.number().int(),
+  paidCashPaise: z.number().int().min(0).default(0),
+  paidBankPaise: z.number().int().min(0).default(0),
+});
+export type RepairDeliver = z.infer<typeof RepairDeliver>;
+
+export const RepairStatusUpdate = z.object({
+  id: z.number().int(),
+  status: RepairStatus,
+});
+export type RepairStatusUpdate = z.infer<typeof RepairStatusUpdate>;
+
+export const OrderInput = z.object({
+  partyId: z.number().int(),
+  spec: z.string().min(1).max(500),
+  estimatedPaise: z.number().int().min(0).default(0),
+  karigarId: z.number().int().optional().nullable(),
+  promisedDate: z.string().default(''),
+  notes: z.string().default(''),
+});
+export type OrderInput = z.infer<typeof OrderInput>;
+
+export const OrderAdvance = z.object({
+  id: z.number().int(),
+  amountPaise: z.number().int().positive(),
+});
+export type OrderAdvance = z.infer<typeof OrderAdvance>;
+
+export const OrderStatusUpdate = z.object({
+  id: z.number().int(),
+  status: OrderStatus,
+});
+export type OrderStatusUpdate = z.infer<typeof OrderStatusUpdate>;
+
+// ────────────────────────────────────────────────────────────
+// Refining
+// ────────────────────────────────────────────────────────────
+export const RefiningSend = z.object({
+  refinerPartyId: z.number().int(),
+  sentCategory: z.enum(['gold', 'silver']),
+  sentStamp: z.string().default(''),
+  sentWeightMg: z.number().int().positive(),
+  notes: z.string().default(''),
+});
+export type RefiningSend = z.infer<typeof RefiningSend>;
+
+export const RefiningReceive = z.object({
+  id: z.number().int(),
+  receivedCategory: z.enum(['gold', 'silver']),
+  receivedStamp: z.string().default(''),
+  receivedWeightMg: z.number().int().min(0),
+  chargesPaise: z.number().int().min(0).default(0),
+  paidCashPaise: z.number().int().min(0).default(0),
+});
+export type RefiningReceive = z.infer<typeof RefiningReceive>;
+
+// ────────────────────────────────────────────────────────────
+// Metal rates (Settings)
+// ────────────────────────────────────────────────────────────
+export const MetalRate = z.object({
+  id: z.number().int(),
+  category: z.enum(['gold', 'silver']),
+  stamp: z.string(),
+  ratePaisePerG: z.number().int().positive(),
+  updatedAt: z.number().int(),
+  updatedBy: z.string(),
+});
+export type MetalRate = z.infer<typeof MetalRate>;
+
+export const MetalRateInput = z.object({
+  category: z.enum(['gold', 'silver']),
+  stamp: z.string().min(1).max(20),
+  ratePaisePerG: z.number().int().positive(),
+});
+export type MetalRateInput = z.infer<typeof MetalRateInput>;
+
+// ────────────────────────────────────────────────────────────
 // Ledger reads
 // ────────────────────────────────────────────────────────────
 export const LedgerRange = z.object({
@@ -311,6 +434,40 @@ export const CH = {
   karigarReceiptsList: 'karigar.receipts.list',
   karigarLedger: 'karigar.ledger',
   karigarBalances: 'karigar.balances',
+  // settings — metal rates
+  ratesList: 'rates.list',
+  ratesUpsert: 'rates.upsert',
+  ratesDelete: 'rates.delete',
+  // pipelines — approval / repair / order
+  approvalCreate: 'approval.create',
+  approvalResolve: 'approval.resolve',
+  approvalsList: 'approvals.list',
+  repairCreate: 'repair.create',
+  repairStatus: 'repair.status',
+  repairDeliver: 'repair.deliver',
+  repairsList: 'repairs.list',
+  orderCreate: 'order.create',
+  orderAdvance: 'order.advance',
+  orderStatus: 'order.status',
+  ordersList: 'orders.list',
+  // refining
+  refiningSend: 'refining.send',
+  refiningReceive: 'refining.receive',
+  refiningCancel: 'refining.cancel',
+  refiningList: 'refining.list',
+  // catalog / tagging
+  photosList: 'photos.list',
+  photosAdd: 'photos.add',
+  photosDelete: 'photos.delete',
+  photosSetPrimary: 'photos.setPrimary',
+  catalogGrid: 'catalog.grid',
+  collectionsList: 'collections.list',
+  collectionsCreate: 'collections.create',
+  collectionsDelete: 'collections.delete',
+  itemCollectionsGet: 'item.collections.get',
+  itemCollectionsSet: 'item.collections.set',
+  itemTagsSet: 'item.tags.set',
+  labelsPrint: 'labels.print',
   // phase 3 — GST reports
   gstGstr1View: 'gst.gstr1.view',
   gstGstr1Csv: 'gst.gstr1.csv',
@@ -318,4 +475,12 @@ export const CH = {
   gstGstr3bCsv: 'gst.gstr3b.csv',
   gstHsnView: 'gst.hsn.view',
   gstHsnCsv: 'gst.hsn.csv',
+  // auth + users
+  authListUsers: 'auth.list',
+  authWhoami: 'auth.whoami',
+  authLogin: 'auth.login',
+  authLogout: 'auth.logout',
+  usersCreate: 'users.create',
+  usersSetPin: 'users.setPin',
+  usersDeactivate: 'users.deactivate',
 } as const;

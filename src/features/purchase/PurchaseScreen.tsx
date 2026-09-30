@@ -3,7 +3,18 @@ import { CH, invoke } from '@/lib/ipc';
 import { useMutation, errText } from '@/lib/useAsync';
 import { fmtPaise, gramsToMg, caratToMg, rupeesToPaise } from '@/lib/format';
 import { ErrorBanner, Spinner, LoadingBlock } from '@/components/Status';
-import type { Item, Party, PurchaseLineInput } from '@shared/ipc';
+import type { Item, Party, PurchaseLineInput, MetalRate } from '@shared/ipc';
+
+type RateMap = Record<string, number>; // key `${category}|${stamp}` → ₹/g
+
+function rateFor(rates: RateMap, it: Item): number {
+  if (!it.stamp) return 0;
+  const perG = rates[`${it.category}|${it.stamp}`];
+  if (!perG) return 0;
+  if (it.unit === 'gms') return perG;
+  if (it.unit === 'carat') return perG * 0.2;
+  return 0;
+}
 
 type Line = {
   key: string;
@@ -22,6 +33,7 @@ type Line = {
 export function PurchaseScreen() {
   const [items, setItems] = useState<Item[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
+  const [rates, setRates] = useState<RateMap>({});
   const [partyId, setPartyId] = useState<number | null>(null);
   const [refNo, setRefNo] = useState('');
   const [paidCash, setPaidCash] = useState(0);
@@ -38,8 +50,15 @@ export function PurchaseScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const [its, ps] = await Promise.all([invoke<Item[]>(CH.itemsList), invoke<Party[]>(CH.partiesList)]);
+        const [its, ps, rs] = await Promise.all([
+          invoke<Item[]>(CH.itemsList),
+          invoke<Party[]>(CH.partiesList),
+          invoke<MetalRate[]>(CH.ratesList),
+        ]);
         setItems(its); setParties(ps.filter((p) => p.role === 'supplier' || p.role === 'both'));
+        const rateMap: RateMap = {};
+        for (const r of rs) rateMap[`${r.category}|${r.stamp}`] = r.ratePaisePerG / 100;
+        setRates(rateMap);
       } catch (e) {
         setBootErr(errText(e));
       } finally {
@@ -56,7 +75,7 @@ export function PurchaseScreen() {
       key: `${it.id}-${Date.now()}`,
       itemId: it.id, description: it.name, category: it.category, unit: it.unit,
       stamp: it.stamp, hsn: it.hsn,
-      qty: it.unit === 'pcs' ? 1 : 0, weight: 0, ratePerUnit: 0, gstPct: it.gstBp / 100,
+      qty: it.unit === 'pcs' ? 1 : 0, weight: 0, ratePerUnit: rateFor(rates, it), gstPct: it.gstBp / 100,
     }]);
     setPickItemId('');
   }
