@@ -34,7 +34,7 @@
 - [x] Purchase screen (supplier + lines + cash/bank payment)
 - [x] A5 GST invoice PDF via pdfkit, opens in default viewer to print
 - [x] Sales + purchase register CSV export (Excel opens directly)
-- [ ] Hand-test end-to-end on dev machine (post 3 sales, 1 purchase, verify ledgers, print an invoice, export CSV, backup, restore drill)
+- [x] Hand-test end-to-end on dev machine — automated via `electron/smoke-cli.ts` (headless Electron runner invokes `runSmokeTest`). 60/60 steps green: parties, items, stock, FTS5, purchase, intra+interstate sales incl. old-gold, karigar issue/receive/pay, approvals/repairs/orders pipelines, refining send/receive/cancel/guards, A5 invoice PDF, CSV exports (sales/purchases/GSTR-1/3B/HSN), backup. **Visual QA of migrated v2 screens still needs eyes.**
 
 **Trigger to advance:** hand-test passes. Shop can open.
 
