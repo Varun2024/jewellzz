@@ -52,6 +52,7 @@
 8b. [ ] Multi-company — deferred (single-shop MVP doesn't need it). Would require `company_id` FK on nearly every row + a company switcher. Revisit when a real second-shop customer asks.
 9. [ ] E-way bill JSON export
 10. [ ] Bill format editor
+11. [x] Purchase register screen — tabbed under Purchase (New / Register). Date range + supplier filter, settled/due pills, running totals in header. Backend `purchasesList` IPC was already in place.
 
 ## Skipped forever (unless explicitly revived)
 

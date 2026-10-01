@@ -1,10 +1,18 @@
-import { useEffect, useState } from 'react';
+/* Shell — the app frame. Ported to v2 primitives.
+ *
+ * Layout: sidebar + main (header, optional first-launch hint, screen area,
+ * status bar). Keyboard: shortcuts route to NAV keys; `/` focuses the Bell.
+ * Rate ticker + idle-gem + Bell overlay all preserved.
+ */
+
+import { useEffect, useRef, useState } from 'react';
 import {
-  Receipt, ShoppingBag, Package, BookOpen, Users, Tag, Hammer,
-  ChartLineUp, FloppyDisk, Wrench, Lightbulb, X, GearSix, Kanban, Recycle, Images,
-} from '@phosphor-icons/react';
+  HomeIcon,
+  SaleIcon, PurchaseIcon, StockIcon, LedgersIcon, PartiesIcon, ItemsIcon,
+  CatalogIcon, KarigarIcon, RefiningIcon, JobsIcon, ReportsIcon,
+  SettingsIcon, BackupIcon, DevIcon,
+} from '@/components/icons/nav';
 import { CH, invoke } from '@/lib/ipc';
-import { fmtPaise } from '@/lib/format';
 import type { MetalRate } from '@shared/ipc';
 import { PartiesScreen } from '@/features/parties/PartiesScreen';
 import { ItemsScreen } from '@/features/items/ItemsScreen';
@@ -21,35 +29,58 @@ import { SettingsScreen } from '@/features/settings/SettingsScreen';
 import { JobsScreen } from '@/features/jobs/JobsScreen';
 import { RefiningScreen } from '@/features/refining/RefiningScreen';
 import { CatalogScreen } from '@/features/catalog/CatalogScreen';
+import { HomeScreen } from '@/features/home/HomeScreen';
+import { Bell } from '@/features/bell/Bell';
+import { ShortcutSheet } from '@/features/shortcuts/ShortcutSheet';
 import { LogoMark, Wordmark } from '@/components/Logo';
+import { Nav, Kbd, Rupee } from '@/components/ui';
+
+type NavEntry = {
+  key: string;
+  label: string;
+  shortcut: string;
+  icon: (typeof HomeIcon);
+  ownerOnly?: boolean;
+};
 
 const NAV = [
-  { key: 'sale',     label: 'Sale',     shortcut: 'F2',  icon: Receipt },
-  { key: 'purchase', label: 'Purchase', shortcut: 'F3',  icon: ShoppingBag },
-  { key: 'stock',    label: 'Stock',    shortcut: 'F4',  icon: Package },
-  { key: 'ledgers',  label: 'Ledgers',  shortcut: 'F5',  icon: BookOpen },
-  { key: 'parties',  label: 'Parties',  shortcut: 'F6',  icon: Users },
-  { key: 'items',    label: 'Items',    shortcut: 'F7',  icon: Tag },
-  { key: 'catalog',  label: 'Catalog',  shortcut: '',    icon: Images },
-  { key: 'karigar',  label: 'Karigar',  shortcut: 'F8',  icon: Hammer },
-  { key: 'refining', label: 'Refining', shortcut: '',    icon: Recycle },
-  { key: 'jobs',     label: 'Jobs',     shortcut: '',    icon: Kanban },
-  { key: 'reports',  label: 'Reports',  shortcut: 'F12', icon: ChartLineUp },
-  { key: 'settings', label: 'Settings', shortcut: '',    icon: GearSix },
-  { key: 'backup',   label: 'Backup',   shortcut: 'F10', icon: FloppyDisk },
-  { key: 'dev',      label: 'Dev',      shortcut: 'F11', icon: Wrench },
-] as const;
+  { key: 'home',     label: 'Today',    shortcut: '',    icon: HomeIcon, ownerOnly: true },
+  { key: 'sale',     label: 'Sale',     shortcut: 'F2',  icon: SaleIcon },
+  { key: 'purchase', label: 'Purchase', shortcut: 'F3',  icon: PurchaseIcon },
+  { key: 'stock',    label: 'Stock',    shortcut: 'F4',  icon: StockIcon },
+  { key: 'ledgers',  label: 'Ledgers',  shortcut: 'F5',  icon: LedgersIcon },
+  { key: 'parties',  label: 'Parties',  shortcut: 'F6',  icon: PartiesIcon },
+  { key: 'items',    label: 'Items',    shortcut: 'F7',  icon: ItemsIcon },
+  { key: 'catalog',  label: 'Catalog',  shortcut: '',    icon: CatalogIcon },
+  { key: 'karigar',  label: 'Karigar',  shortcut: 'F8',  icon: KarigarIcon },
+  { key: 'refining', label: 'Refining', shortcut: '',    icon: RefiningIcon },
+  { key: 'jobs',     label: 'Jobs',     shortcut: '',    icon: JobsIcon },
+  { key: 'reports',  label: 'Reports',  shortcut: 'F12', icon: ReportsIcon },
+  { key: 'settings', label: 'Settings', shortcut: '',    icon: SettingsIcon },
+  { key: 'backup',   label: 'Backup',   shortcut: 'F10', icon: BackupIcon },
+  { key: 'dev',      label: 'Dev',      shortcut: 'F11', icon: DevIcon },
+] satisfies readonly NavEntry[];
 
 type NavKey = (typeof NAV)[number]['key'];
 
 interface CurrentUser { id: number; name: string; role: 'owner' | 'counter' }
 
-export function Shell({ status, me, onLogout }: { status: string; me: CurrentUser; onLogout: () => void }) {
-  const [active, setActive] = useState<NavKey>('sale');
+export function Shell({
+  status, me, onLogout, initialActive = 'sale',
+}: {
+  status: string;
+  me: CurrentUser;
+  onLogout: () => void;
+  initialActive?: NavKey;
+}) {
+  const [active, setActive] = useState<NavKey>(initialActive);
+  const visibleNav = NAV.filter((n) => !n.ownerOnly || me.role === 'owner');
   const [hintOpen, setHintOpen] = useState(() => localStorage.getItem('jewelzz.hint.dismissed') !== '1');
   const [rates, setRates] = useState<Record<string, number>>({});
+  const prevRatesRef = useRef<Record<string, number>>({});
+  const [rateDelta, setRateDelta] = useState<Record<string, 'up' | 'down'>>({});
 
-  // Load rates once on mount; refresh when Settings screen is closed (naive: on interval).
+  // Rate ticker — poll every 30s; flash the cell when a rate changes.
   useEffect(() => {
     let alive = true;
     async function load() {
@@ -58,6 +89,20 @@ export function Shell({ status, me, onLogout }: { status: string; me: CurrentUse
         if (!alive) return;
         const m: Record<string, number> = {};
         for (const x of r) m[`${x.category}|${x.stamp}`] = x.ratePaisePerG;
+        const prev = prevRatesRef.current;
+        if (Object.keys(prev).length > 0) {
+          const delta: Record<string, 'up' | 'down'> = {};
+          for (const k of Object.keys(m)) {
+            if (prev[k] !== undefined && prev[k] !== m[k]) {
+              delta[k] = m[k] > prev[k] ? 'up' : 'down';
+            }
+          }
+          if (Object.keys(delta).length) {
+            setRateDelta(delta);
+            setTimeout(() => setRateDelta({}), 1000);
+          }
+        }
+        prevRatesRef.current = m;
         setRates(m);
       } catch { /* status bar can stay dashed */ }
     }
@@ -65,21 +110,48 @@ export function Shell({ status, me, onLogout }: { status: string; me: CurrentUse
     const t = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
-  const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-  const time  = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+
+  // Idle detection → gem pulse.
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      setIdle(false);
+      clearTimeout(t);
+      t = setTimeout(() => setIdle(true), 60_000);
+    };
+    reset();
+    const events = ['keydown', 'mousemove', 'mousedown', 'wheel', 'touchstart'] as const;
+    events.forEach((ev) => window.addEventListener(ev, reset, { passive: true }));
+    return () => {
+      clearTimeout(t);
+      events.forEach((ev) => window.removeEventListener(ev, reset));
+    };
+  }, []);
+
+  // Live clock — ticks every 15s so the header stays present without burning
+  // renders. 15s is enough to look alive; a per-second clock would be noise.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  const today = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const time  = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
   function dismissHint() {
     setHintOpen(false);
     try { localStorage.setItem('jewelzz.hint.dismissed', '1'); } catch { /* ignore */ }
   }
 
+  // Keyboard router — F2…F12 jump between screens; `/` focuses the search bar.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const m = NAV.find((n) => n.shortcut === e.key);
       if (m) { e.preventDefault(); setActive(m.key); }
       if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
         e.preventDefault();
-        (document.querySelector<HTMLInputElement>('input[placeholder^="search"]'))?.focus();
+        document.querySelector<HTMLInputElement>('input[placeholder^="search"]')?.focus();
       }
     }
     window.addEventListener('keydown', onKey);
@@ -89,112 +161,183 @@ export function Shell({ status, me, onLogout }: { status: string; me: CurrentUse
   const activeItem = NAV.find((n) => n.key === active);
 
   return (
-    <div className="flex h-full">
-      {/* ─── sidebar ─────────────────────────────────────── */}
-      <aside className="w-52 bg-[var(--paper-2)] border-r border-[var(--rule)] flex flex-col">
-        <div className="px-5 py-4 border-b border-[var(--rule)] flex items-center gap-2">
-          <LogoMark size={28} />
-          <div>
+    <div className="ds-v2" style={{ display: 'flex', height: '100%', background: 'var(--bg)' }}>
+      <Bell
+        onJumpItems={() => setActive('items')}
+        onJumpParties={() => setActive('parties')}
+        onJumpTo={(a) => setActive(a as NavKey)}
+      />
+      <ShortcutSheet />
+
+      {/* ---------- sidebar ---------- */}
+      <aside style={{
+        width: 220,
+        background: 'var(--surface)',
+        borderRight: '1px solid var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        <div style={{
+          padding: 'var(--s4)',
+          borderBottom: '1px solid var(--border)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s2)',
+        }}>
+          <LogoMark size={28} idle={idle} boot />
+          <div style={{ minWidth: 0 }}>
             <Wordmark size={18} />
-            <div className="text-[10px] text-[var(--ink-500)] mt-0.5 tracking-wider uppercase">Demo Jewellers</div>
+            <div style={{
+              fontSize: 'var(--t-xs)',
+              color: 'var(--text-mute)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              marginTop: 2,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>Demo Jewellers</div>
           </div>
         </div>
 
-        <nav className="flex-1 py-3">
-          {NAV.map((n) => {
-            const Icon = n.icon;
-            const isActive = active === n.key;
-            return (
-              <button
-                key={n.key}
-                onClick={() => setActive(n.key)}
-                className="nav-item"
-                data-active={isActive}
-              >
-                <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
-                <span>{n.label}</span>
-                {n.shortcut && <span className="kbd">{n.shortcut}</span>}
-              </button>
-            );
-          })}
-        </nav>
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          <Nav>
+            {visibleNav.map((n) => {
+              const Icon = n.icon;
+              const isActive = active === n.key;
+              return (
+                <Nav.Item
+                  key={n.key}
+                  active={isActive}
+                  kbd={n.shortcut || undefined}
+                  onClick={() => setActive(n.key)}
+                  leading={<Icon size={16} active={isActive} />}
+                >
+                  {n.label}
+                </Nav.Item>
+              );
+            })}
+          </Nav>
+        </div>
 
-        <div className="px-5 py-3 border-t border-[var(--rule)]">
-          <div className="text-[10px] tracking-widest uppercase text-[var(--ink-300)]">Est. 2026</div>
-          <div className="text-[10px] mono text-[var(--ink-500)] mt-1">v0.0.1 · offline</div>
+        <div style={{
+          padding: 'var(--s3) var(--s4)',
+          borderTop: '1px solid var(--border)',
+          fontSize: 'var(--t-xs)',
+          color: 'var(--text-faint)',
+        }}>
+          <div style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>Est. 2026</div>
+          <div style={{ fontFamily: 'var(--font-mono)', marginTop: 2 }}>v0.0.1 · offline</div>
         </div>
       </aside>
 
-      {/* ─── main pane ───────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* ---------- main pane ---------- */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Header */}
-        <header className="h-14 border-b border-[var(--rule)] bg-[var(--paper)] flex items-center px-6 justify-between gap-6">
-          <div className="flex items-baseline gap-4">
-            <span className="screen-title">{activeItem?.label}</span>
-            <span className="text-[11px] mono text-[var(--ink-500)] tracking-wider">
+        <header style={{
+          height: 48,
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--surface)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 var(--container-pad)',
+          gap: 'var(--s4)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--s3)', minWidth: 0 }}>
+            <span style={{ fontSize: 'var(--t-lg)', fontWeight: 600 }}>
+              {activeItem?.label}
+            </span>
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--t-sm)',
+              color: 'var(--text-mute)',
+              letterSpacing: '0.04em',
+            }}>
               {today.toUpperCase()} · {time}
             </span>
           </div>
-
-          <SearchBar
-            onPick={(hit) => {
-              if (hit.kind === 'item') setActive('items');
-              if (hit.kind === 'party') setActive('parties');
-            }}
-          />
+          <div style={{ marginLeft: 'auto' }}>
+            <SearchBar
+              onPick={(hit) => {
+                if (hit.kind === 'item')  setActive('items');
+                if (hit.kind === 'party') setActive('parties');
+              }}
+            />
+          </div>
         </header>
 
-        {/* First-launch hint bar */}
+        {/* First-launch hint bar — low-key, gold-tinted stripe */}
         {hintOpen && (
-          <div className="flex items-center gap-3 px-6 py-2 border-b border-[var(--rule)]"
-               style={{ background: 'linear-gradient(180deg, #FBF5E4 0%, var(--paper-2) 100%)' }}>
-            <Lightbulb size={16} weight="fill" color="var(--gold-700)" />
-            <div className="text-[12px] text-[var(--ink-700)] flex-1">
-              <b className="text-[var(--ink-950)]">Quick keys:</b>{' '}
-              <span className="mono text-[var(--ink-500)]">F2</span> new sale ·{' '}
-              <span className="mono text-[var(--ink-500)]">F3</span> new purchase ·{' '}
-              <span className="mono text-[var(--ink-500)]">F9</span> post &amp; print ·{' '}
-              <span className="mono text-[var(--ink-500)]">/</span> search anywhere ·{' '}
-              <span className="mono text-[var(--ink-500)]">F10</span> backup
-            </div>
-            <button onClick={dismissHint} className="btn-ghost" style={{ padding: 4, height: 24 }} aria-label="dismiss">
-              <X size={12} />
-            </button>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--s3)',
+            padding: 'var(--s2) var(--container-pad)',
+            borderBottom: '1px solid var(--border)',
+            background: 'color-mix(in oklab, var(--gold-500) 8%, var(--surface))',
+            fontSize: 'var(--t-sm)',
+            color: 'var(--text-mute)',
+          }}>
+            <span style={{ color: 'var(--accent-press)', fontWeight: 500 }}>Quick keys</span>
+            <HintKey keys={['Ctrl', 'Space']} label="ring the Bell" />
+            <HintKey keys={['F2']} label="new sale" />
+            <HintKey keys={['F9']} label="weigh &amp; print" />
+            <HintKey keys={['/']} label="search" />
+            <HintKey keys={['F10']} label="seal the day" />
+            <HintKey keys={['?']} label="all shortcuts" />
+            <button
+              onClick={dismissHint}
+              aria-label="dismiss"
+              style={{
+                marginLeft: 'auto',
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-mute)', fontSize: 16, lineHeight: 1,
+                padding: 4,
+              }}
+            >×</button>
           </div>
         )}
 
-        {/* Main content */}
-        <main className="flex-1 overflow-auto px-6 py-6">
-          <Screen area={active} />
+        {/* Screen area — keyed wrapper triggers the screen-enter animation on every nav change */}
+        <main style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <div key={active} className="ds-v2 screen-enter" style={{ height: '100%' }}>
+            <Screen area={active} me={me} onOpenCounter={() => setActive('sale')} />
+          </div>
         </main>
 
-        {/* Bottom status bar — always-on shop telemetry */}
-        <footer className="statusbar">
-          <span><span className="dot dot-ok" /> IPC {status.startsWith('ok') ? 'ok' : status}</span>
-          <span className="sep">·</span>
-          <span>
-            Au22k <span className="text-[var(--gold-700)]">
-              {rates['gold|22k'] ? fmtPaise(rates['gold|22k']) + '/g' : '—'}
+        {/* Status bar */}
+        <footer style={{
+          height: 28,
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
+          padding: '0 var(--container-pad)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s3)',
+          fontSize: 'var(--t-sm)',
+          color: 'var(--text-mute)',
+        }}>
+          <StatusDot ok={status.startsWith('ok')} />
+          <span>counter {status.startsWith('ok') ? 'open' : status}</span>
+          <SepDot />
+          <RateCell label="Au22k" value={rates['gold|22k']}   delta={rateDelta['gold|22k']} />
+          <SepDot />
+          <RateCell label="Ag925" value={rates['silver|925']} delta={rateDelta['silver|925']} />
+
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 'var(--s2)' }}>
+            <span style={{ color: me.role === 'owner' ? 'var(--accent-press)' : 'var(--text-mute)', fontWeight: 500 }}>
+              {me.name}
             </span>
-          </span>
-          <span className="sep">·</span>
-          <span>
-            Ag925 <span className="text-[var(--gold-700)]">
-              {rates['silver|925'] ? fmtPaise(rates['silver|925']) + '/g' : '—'}
-            </span>
-          </span>
-          <span className="ml-auto flex items-center gap-2">
-            <span className="text-[var(--ink-500)]">
-              <span className={me.role === 'owner' ? 'text-[var(--gold-700)]' : ''}>{me.name}</span>
-              <span className="text-[var(--ink-300)]"> · {me.role}</span>
-            </span>
+            <span style={{ color: 'var(--text-faint)' }}>· {me.role}</span>
             <button
-              className="link"
-              style={{ fontSize: 11 }}
               onClick={onLogout}
-              title="sign out"
+              title="close the counter"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--accent)', fontSize: 'var(--t-sm)', padding: 0,
+              }}
             >
-              sign out
+              close counter
             </button>
           </span>
         </footer>
@@ -203,8 +346,87 @@ export function Shell({ status, me, onLogout }: { status: string; me: CurrentUse
   );
 }
 
-function Screen({ area }: { area: NavKey }) {
+/* -------- status-bar bits -------- */
+
+function StatusDot({ ok }: { ok: boolean }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 8, height: 8, borderRadius: '50%',
+        background: ok ? 'var(--pos)' : 'var(--neg)',
+        display: 'inline-block',
+        boxShadow: ok ? '0 0 0 2px color-mix(in oklab, var(--pos) 20%, transparent)' : undefined,
+      }}
+    />
+  );
+}
+
+function SepDot() {
+  return <span style={{ color: 'var(--text-faint)' }}>·</span>;
+}
+
+function RateCell({ label, value, delta }: {
+  label: string;
+  value: number | undefined;
+  delta: 'up' | 'down' | undefined;
+}) {
+  const arrow = delta === 'up' ? '▲' : delta === 'down' ? '▼' : '';
+  const color =
+    delta === 'up'   ? 'var(--pos)' :
+    delta === 'down' ? 'var(--neg)' :
+                       'var(--accent-press)';
+  // The whole cell gets a brief gold-wash flash whenever a delta ticks in — a
+  // quiet "something changed" signal in the periphery.
+  return (
+    <span
+      key={value ?? 'empty'}
+      className={delta ? 'rate-cell-flash' : undefined}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: 4,
+        padding: '0 4px',
+        borderRadius: 3,
+      }}
+    >
+      <span style={{ color: 'var(--text-mute)' }}>{label}</span>
+      {value ? (
+        <>
+          {arrow && <span style={{ color, fontSize: 10 }}>{arrow}</span>}
+          <span style={{
+            color,
+            fontFamily: 'var(--font-mono)',
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            <Rupee paise={value} />
+            <span style={{ color: 'var(--text-mute)', marginLeft: 1 }}>/g</span>
+          </span>
+        </>
+      ) : <span style={{ color: 'var(--text-faint)' }}>—</span>}
+    </span>
+  );
+}
+
+function HintKey({ keys, label }: { keys: string[]; label: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {keys.map((k, i) => (
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          <Kbd>{k}</Kbd>
+          {i < keys.length - 1 && <span style={{ color: 'var(--text-faint)' }}>+</span>}
+        </span>
+      ))}
+      <span dangerouslySetInnerHTML={{ __html: label }} />
+    </span>
+  );
+}
+
+function Screen({ area, me, onOpenCounter }: {
+  area: NavKey; me: CurrentUser; onOpenCounter: () => void;
+}) {
   switch (area) {
+    case 'home':     return <HomeScreen me={me} onOpenCounter={onOpenCounter} />;
     case 'sale':     return <SaleScreen />;
     case 'purchase': return <PurchaseScreen />;
     case 'stock':    return <StockScreen />;

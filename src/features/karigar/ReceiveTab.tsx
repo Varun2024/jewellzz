@@ -1,9 +1,13 @@
+/* Receive slip — ported to v2 primitives. */
+
 import { useEffect, useState } from 'react';
 import { CH, invoke } from '@/lib/ipc';
 import { useAsync, useMutation } from '@/lib/useAsync';
-import { fmtGrams, fmtPaise, gramsToMg, caratToMg, rupeesToPaise } from '@/lib/format';
-import { ErrorBanner, LoadingBlock, EmptyState, Spinner } from '@/components/Status';
+import { gramsToMg, caratToMg, rupeesToPaise } from '@/lib/format';
 import type { Karigar, Item } from '@shared/ipc';
+import {
+  Sheet, Button, Field, Rupee, Weight, Pill, Progress, Empty,
+} from '@/components/ui';
 
 type Cat = 'gold' | 'silver' | 'stone' | 'artificial';
 type Line = {
@@ -17,7 +21,6 @@ type Line = {
   unit: 'g' | 'ct';
   note: string;
 };
-
 const CATEGORIES: Cat[] = ['gold', 'silver', 'stone', 'artificial'];
 
 export function ReceiveTab() {
@@ -28,7 +31,7 @@ export function ReceiveTab() {
   const [karigarId, setKarigarId] = useState<number | null>(null);
   const [openIssues, setOpenIssues] = useState<any[]>([]);
   const [relatedIssueId, setRelatedIssueId] = useState<number | null>(null);
-  const [labour, setLabour] = useState(0);   // rupees
+  const [labour, setLabour] = useState(0);
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
   const [err, setErr] = useState('');
@@ -55,7 +58,7 @@ export function ReceiveTab() {
 
   async function submit() {
     setErr(''); setOk(''); post.clearError();
-    if (!karigarId) return setErr('pick a karigar');
+    if (!karigarId)         return setErr('pick a karigar');
     if (lines.length === 0) return setErr('add at least one line');
     try {
       const payload = {
@@ -68,7 +71,7 @@ export function ReceiveTab() {
           category: l.category,
           stamp: l.category === 'gold' || l.category === 'silver' ? l.stamp : '',
           qty: Math.round(l.qty),
-          weightMg: l.unit === 'ct' ? caratToMg(l.weight) : gramsToMg(l.weight),
+          weightMg:  l.unit === 'ct' ? caratToMg(l.weight)  : gramsToMg(l.weight),
           wastageMg: l.unit === 'ct' ? caratToMg(l.wastage) : gramsToMg(l.wastage),
           note: l.note,
         })),
@@ -85,144 +88,237 @@ export function ReceiveTab() {
     try {
       await pay.run({ karigarId, amountPaise: rupeesToPaise(amount), note: 'labour payment' });
       setOk('paid');
-    } catch { /* surfaced via pay.error */ }
+    } catch { /* surfaced */ }
   }
 
   return (
-    <div className="grid grid-cols-2 gap-6">
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium">New receipt slip</h3>
-        {karigars.error && <ErrorBanner message={karigars.error} onDismiss={() => karigars.reload()} />}
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s4)' }}>
 
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs text-muted">Karigar
-            <select className="input w-full" value={karigarId ?? ''} onChange={(e) => setKarigarId(Number(e.target.value) || null)} disabled={karigars.loading}>
+      <Sheet title="New receipt slip">
+        {karigars.error && <InlineAlert message={karigars.error} onDismiss={() => karigars.reload()} />}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+          <div className="field">
+            <label className="field__label">Karigar</label>
+            <select
+              className="input"
+              value={karigarId ?? ''}
+              onChange={(e) => setKarigarId(Number(e.target.value) || null)}
+              disabled={karigars.loading}
+            >
               <option value="">{karigars.loading ? 'loading…' : '— pick —'}</option>
               {(karigars.data ?? []).map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
             </select>
-          </label>
-          <label className="text-xs text-muted">Related issue (optional)
-            <select className="input w-full" value={relatedIssueId ?? ''} onChange={(e) => setRelatedIssueId(Number(e.target.value) || null)} disabled={!karigarId}>
+          </div>
+          <div className="field">
+            <label className="field__label">Related issue (optional)</label>
+            <select
+              className="input"
+              value={relatedIssueId ?? ''}
+              onChange={(e) => setRelatedIssueId(Number(e.target.value) || null)}
+              disabled={!karigarId}
+            >
               <option value="">— none —</option>
-              {openIssues.map((i) => <option key={i.id} value={i.id}>{i.slipNo} · {fmtGrams(i.totalMg ?? 0)}</option>)}
+              {openIssues.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.slipNo} · {((i.totalMg ?? 0) / 1000).toFixed(3)} g
+                </option>
+              ))}
             </select>
-          </label>
+          </div>
         </div>
 
-        <div className="flex justify-between items-center">
-          <div className="text-xs text-muted">received lines</div>
-          <button type="button" className="btn text-xs" onClick={addLine}>+ add line</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s2)' }}>
+          <div style={{
+            fontSize: 'var(--t-sm)', color: 'var(--text-mute)',
+            textTransform: 'uppercase', letterSpacing: '0.04em',
+          }}>Received lines</div>
+          <Button type="button" onClick={addLine}>+ add line</Button>
         </div>
 
-        <table className="w-full text-xs">
-          <thead className="text-muted border-b border-border">
+        <table className="table" style={{ marginBottom: 'var(--s3)' }}>
+          <thead>
             <tr>
-              <th className="text-left py-1">Item (opt)</th>
-              <th className="text-left">Cat</th>
-              <th className="text-left">Stamp</th>
-              <th className="text-right">Qty</th>
-              <th className="text-right">Weight</th>
-              <th className="text-right">Wastage</th>
-              <th className="text-left">Unit</th>
-              <th></th>
+              <th>Item (opt)</th>
+              <th style={{ width: 90 }}>Cat</th>
+              <th style={{ width: 70 }}>Stamp</th>
+              <th className="num" style={{ width: 56 }}>Qty</th>
+              <th className="num" style={{ width: 90 }}>Weight</th>
+              <th className="num" style={{ width: 90 }}>Wastage</th>
+              <th style={{ width: 54 }}>Unit</th>
+              <th style={{ width: 28 }} />
             </tr>
           </thead>
           <tbody>
             {lines.map((l) => (
-              <tr key={l.key} className="border-b border-border/50">
+              <tr key={l.key}>
                 <td>
-                  <select className="input" value={l.itemId ?? ''} onChange={(e) => {
-                    const id = Number(e.target.value) || null;
-                    const it = items.data?.find((x) => x.id === id);
-                    upd(l.key, {
-                      itemId: id,
-                      category: it?.category ?? l.category,
-                      stamp: it?.stamp ?? l.stamp,
-                      unit: it?.unit === 'carat' ? 'ct' : 'g',
-                    });
-                  }}>
+                  <select
+                    className="input"
+                    style={{ height: 24, fontSize: 'var(--t-sm)' }}
+                    value={l.itemId ?? ''}
+                    onChange={(e) => {
+                      const id = Number(e.target.value) || null;
+                      const it = items.data?.find((x) => x.id === id);
+                      upd(l.key, {
+                        itemId: id,
+                        category: it?.category ?? l.category,
+                        stamp: it?.stamp ?? l.stamp,
+                        unit: it?.unit === 'carat' ? 'ct' : 'g',
+                      });
+                    }}
+                  >
                     <option value="">— none —</option>
-                    {(items.data ?? []).map((i) => <option key={i.id} value={i.id}>{i.sku} — {i.name}</option>)}
+                    {(items.data ?? []).map((i) => (
+                      <option key={i.id} value={i.id}>{i.sku} — {i.name}</option>
+                    ))}
                   </select>
                 </td>
                 <td>
-                  <select className="input" value={l.category} onChange={(e) => upd(l.key, { category: e.target.value as Cat })} disabled={!!l.itemId}>
+                  <select
+                    className="input"
+                    style={{ height: 24, fontSize: 'var(--t-sm)' }}
+                    value={l.category}
+                    onChange={(e) => upd(l.key, { category: e.target.value as Cat })}
+                    disabled={!!l.itemId}
+                  >
                     {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </td>
                 <td>
-                  <input className="input w-16 mono" value={l.stamp} onChange={(e) => upd(l.key, { stamp: e.target.value })}
-                         disabled={l.category !== 'gold' && l.category !== 'silver'} />
+                  <input
+                    className="input"
+                    style={{ height: 24, width: 56, fontFamily: 'var(--font-mono)' }}
+                    value={l.stamp}
+                    onChange={(e) => upd(l.key, { stamp: e.target.value })}
+                    disabled={l.category !== 'gold' && l.category !== 'silver'}
+                  />
                 </td>
-                <td className="text-right"><input className="input w-14 text-right mono" type="number" value={l.qty} onChange={(e) => upd(l.key, { qty: Number(e.target.value) || 0 })} /></td>
-                <td className="text-right"><input className="input w-20 text-right mono" type="number" step="0.001" value={l.weight} onChange={(e) => upd(l.key, { weight: Number(e.target.value) || 0 })} /></td>
-                <td className="text-right"><input className="input w-20 text-right mono" type="number" step="0.001" value={l.wastage} onChange={(e) => upd(l.key, { wastage: Number(e.target.value) || 0 })} /></td>
+                <td className="num">
+                  <input
+                    className="input input--num"
+                    style={{ width: 46, height: 24 }}
+                    type="number"
+                    value={l.qty}
+                    onChange={(e) => upd(l.key, { qty: Number(e.target.value) || 0 })}
+                  />
+                </td>
+                <td className="num">
+                  <input
+                    className="input input--num"
+                    style={{ width: 80, height: 24 }}
+                    type="number" step="0.001"
+                    value={l.weight}
+                    onChange={(e) => upd(l.key, { weight: Number(e.target.value) || 0 })}
+                  />
+                </td>
+                <td className="num">
+                  <input
+                    className="input input--num"
+                    style={{ width: 80, height: 24 }}
+                    type="number" step="0.001"
+                    value={l.wastage}
+                    onChange={(e) => upd(l.key, { wastage: Number(e.target.value) || 0 })}
+                  />
+                </td>
                 <td>
-                  <select className="input" value={l.unit} onChange={(e) => upd(l.key, { unit: e.target.value as any })}>
+                  <select
+                    className="input"
+                    style={{ height: 24, width: 44, fontSize: 'var(--t-sm)' }}
+                    value={l.unit}
+                    onChange={(e) => upd(l.key, { unit: e.target.value as 'g' | 'ct' })}
+                  >
                     <option value="g">g</option><option value="ct">ct</option>
                   </select>
                 </td>
-                <td className="text-right"><button className="link text-danger" onClick={() => del(l.key)}>×</button></td>
+                <td className="num">
+                  <button
+                    onClick={() => del(l.key)}
+                    aria-label="remove"
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: 'var(--text-faint)', fontSize: 16, lineHeight: 1,
+                    }}
+                  >×</button>
+                </td>
               </tr>
             ))}
-            {lines.length === 0 && <tr><td colSpan={8}><EmptyState>no lines — add one</EmptyState></td></tr>}
+            {lines.length === 0 && (
+              <tr><td colSpan={8} style={{ padding: 'var(--s4)' }}><Empty title="No lines — add one" /></td></tr>
+            )}
           </tbody>
         </table>
 
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs text-muted">Labour claim ₹
-            <input type="number" step="0.01" className="input w-full mono" value={labour} onChange={(e) => setLabour(Number(e.target.value) || 0)} />
-          </label>
-          <label className="text-xs text-muted">Notes
-            <input className="input w-full" value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s3)' }}>
+          <Field
+            label="Labour claim ₹"
+            numeric type="number" step="0.01"
+            value={labour}
+            onChange={(e) => setLabour(Number(e.target.value) || 0)}
+          />
+          <Field label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
 
-        <div className="flex gap-2 items-center flex-wrap">
-          <button className="btn-primary" onClick={submit} disabled={post.loading}>
-            {post.loading ? <Spinner label="posting…" /> : 'Post receipt slip'}
-          </button>
-          <button className="btn" onClick={() => payNow(labour)} disabled={pay.loading || !karigarId || labour <= 0}>
-            {pay.loading ? <Spinner label="paying…" /> : `Pay ₹${labour.toFixed(2)} now`}
-          </button>
-          {err && <ErrorBanner message={err} onDismiss={() => setErr('')} />}
-          {post.error && <ErrorBanner message={post.error} onDismiss={post.clearError} />}
-          {pay.error && <ErrorBanner message={pay.error} onDismiss={pay.clearError} />}
-          {ok && !err && !post.error && !pay.error && <div className="text-success text-xs">{ok}</div>}
+        <div style={{ display: 'flex', gap: 'var(--s2)', alignItems: 'center', flexWrap: 'wrap', marginTop: 'var(--s3)' }}>
+          <Button variant="primary" onClick={submit} disabled={post.loading}>
+            {post.loading ? 'Posting…' : 'Post receipt slip'}
+          </Button>
+          <Button onClick={() => payNow(labour)} disabled={pay.loading || !karigarId || labour <= 0}>
+            {pay.loading ? 'Paying…' : `Pay ₹${labour.toFixed(2)} now`}
+          </Button>
+          {err && <InlineAlert message={err} onDismiss={() => setErr('')} />}
+          {post.error && <InlineAlert message={post.error} onDismiss={post.clearError} />}
+          {pay.error && <InlineAlert message={pay.error} onDismiss={pay.clearError} />}
+          {ok && !err && !post.error && !pay.error && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Pill tone="pos">{ok}</Pill>
+            </span>
+          )}
         </div>
-      </div>
+      </Sheet>
 
-      <div>
-        <h3 className="text-sm font-medium mb-2">Recent receipts</h3>
-        {receipts.error && <ErrorBanner message={receipts.error} onDismiss={() => receipts.reload()} />}
-        {receipts.loading ? <LoadingBlock label="loading…" /> : (
-          <table className="w-full text-xs">
-            <thead className="text-muted border-b border-border">
-              <tr>
-                <th className="text-left py-1">Slip</th>
-                <th className="text-left">When</th>
-                <th className="text-left">Karigar</th>
-                <th className="text-right">Received</th>
-                <th className="text-right">Wastage</th>
-                <th className="text-right">Labour</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(receipts.data ?? []).map((r) => (
-                <tr key={r.id} className="border-b border-border/50">
-                  <td className="py-1 mono">{r.slipNo}</td>
-                  <td className="mono">{new Date(r.ts * 1000).toLocaleString('en-IN')}</td>
-                  <td>{r.karigarName}</td>
-                  <td className="text-right mono">{fmtGrams(r.totalReceivedMg ?? 0)}</td>
-                  <td className="text-right mono">{fmtGrams(r.totalWastageMg ?? 0)}</td>
-                  <td className="text-right mono">{fmtPaise(r.labourPaise)}</td>
+      <Sheet title="Recent receipts" flush>
+        {receipts.error && <div style={{ padding: 12 }}><InlineAlert message={receipts.error} onDismiss={() => receipts.reload()} /></div>}
+        {receipts.loading ? <div style={{ padding: 12 }}><Progress /></div>
+          : (receipts.data?.length ?? 0) === 0 ? <Empty mark="ledger" title="No receipts yet" />
+          : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 100 }}>Slip</th>
+                  <th style={{ width: 150 }}>When</th>
+                  <th>Karigar</th>
+                  <th className="num" style={{ width: 100 }}>Received</th>
+                  <th className="num" style={{ width: 100 }}>Wastage</th>
+                  <th className="num" style={{ width: 120 }}>Labour</th>
                 </tr>
-              ))}
-              {(receipts.data?.length ?? 0) === 0 && <tr><td colSpan={6}><EmptyState>no receipts yet</EmptyState></td></tr>}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </thead>
+              <tbody>
+                {(receipts.data ?? []).map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)' }}>{r.slipNo}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>
+                      {new Date(r.ts * 1000).toLocaleString('en-IN')}
+                    </td>
+                    <td>{r.karigarName}</td>
+                    <td className="num"><Weight mg={r.totalReceivedMg ?? 0} /></td>
+                    <td className="num"><Weight mg={r.totalWastageMg ?? 0} /></td>
+                    <td className="num"><Rupee paise={r.labourPaise} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </Sheet>
+    </div>
+  );
+}
+
+function InlineAlert({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="alert">
+      <span style={{ whiteSpace: 'pre-wrap' }}>{message}</span>
+      {onDismiss && <button className="alert__dismiss" onClick={onDismiss} aria-label="dismiss">×</button>}
     </div>
   );
 }
