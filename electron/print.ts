@@ -12,18 +12,25 @@ const inr = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFr
 const p = (paise: number) => `${inr.format(paise / 100)}`;
 const g = (mg: number) => (mg / 1000).toFixed(3);
 
-const INK   = '#14100E';
-const MUTED = '#7A6E64';
-const RULE  = '#B2A69B';
-const GOLD  = '#B8892E';
+const INK    = '#14100E';
+const MUTED  = '#7A6E64';
+const RULE   = '#B2A69B';
+const GOLD   = '#B8892E';
+const FOREST = '#0F2A26'; // night ink — the leather-ledger deep green
+const PAPER  = '#F6F2EA';
 
 type Row = Record<string, any>;
 
 // Small J-scale mark drawn with pdfkit primitives (same shape as the app SVG).
-function drawLogoStamp(doc: PDFKit.PDFDocument, x: number, y: number, size: number) {
+function drawLogoStamp(
+  doc: PDFKit.PDFDocument,
+  x: number, y: number, size: number,
+  opts: { onDark?: boolean } = {},
+) {
   const s = size / 32;
+  const stroke = opts.onDark ? PAPER : INK;
   doc.save();
-  doc.strokeColor(INK).lineWidth(1.2 * s).lineCap('round');
+  doc.strokeColor(stroke).lineWidth(1.2 * s).lineCap('round');
   // J-hook top
   const hookY = y + 5 * s;
   const cx = x + 16 * s;
@@ -62,27 +69,42 @@ export async function printSaleInvoice(db: Database.Database, saleId: number): P
   const M = 32;
   const rightX = W - M;
 
-  // ─── header: logo + brand + company block ────────────────────────────
-  drawLogoStamp(doc, M, M - 2, 24);
-  const brandX = M + 32;
-  doc.font('Times-Italic').fontSize(22).fillColor(INK).text(company.name || 'Jewelzz', brandX, M);
-  doc.font('Helvetica').fontSize(8).fillColor(MUTED)
-    .text(company.address || '', brandX, M + 24, { width: W - 2 * M - 32 });
-  doc.text(`GSTIN ${company.gstin || '—'}    ·    Ph ${company.phone || '—'}`, brandX, M + 34);
+  // ─── faint J-scale watermark centered on the page ────────────────────
+  // Sits behind everything, only visible if you look for it — real ledger
+  // book detail. Drawn first so it renders below the header stripe + text.
+  doc.save();
+  doc.opacity(0.05);
+  drawLogoStamp(doc, W / 2 - 60, doc.page.height / 2 - 60, 120);
+  doc.restore();
 
-  // Bill number card top-right
-  doc.font('Times-Italic').fontSize(9).fillColor(MUTED).text('TAX INVOICE', M, M, { width: W - 2 * M, align: 'right' });
-  doc.font('Courier-Bold').fontSize(14).fillColor(INK).text(sale.bill_no, M, M + 12, { width: W - 2 * M, align: 'right' });
-  doc.font('Courier').fontSize(8).fillColor(MUTED).text(
+  // ─── night-ink header strip (deep-green ledger cover) ────────────────
+  // A slim forest band at the very top with a gold hairline below anchors
+  // the invoice visually — this is what a customer keeps in their file.
+  const stripeH = 46;
+  doc.rect(0, 0, W, stripeH).fill(FOREST);
+  doc.strokeColor(GOLD).lineWidth(0.6);
+  doc.moveTo(0, stripeH).lineTo(W, stripeH).stroke();
+  doc.moveTo(0, stripeH + 2.5).lineTo(W, stripeH + 2.5).stroke();
+
+  // Company brand rendered on the forest stripe in paper cream
+  drawLogoStamp(doc, M, 12, 22, { onDark: true });
+  const brandX = M + 30;
+  doc.font('Times-Italic').fontSize(18).fillColor(PAPER)
+    .text(company.name || 'Jewelzz', brandX, 12);
+  doc.font('Helvetica').fontSize(7).fillColor('#D8CFBE')
+    .text(`GSTIN ${company.gstin || '—'}   ·   ${company.address || ''}   ·   Ph ${company.phone || '—'}`,
+          brandX, 30, { width: W - 2 * M - 30, ellipsis: true });
+
+  // Bill number card top-right, inside the forest stripe
+  doc.font('Times-Italic').fontSize(9).fillColor('#EED9A6').text('TAX INVOICE', M, 10, { width: W - 2 * M, align: 'right' });
+  doc.font('Courier-Bold').fontSize(13).fillColor(PAPER).text(sale.bill_no, M, 22, { width: W - 2 * M, align: 'right' });
+  doc.font('Courier').fontSize(7).fillColor('#D8CFBE').text(
     new Date(sale.ts * 1000).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-    M, M + 30, { width: W - 2 * M, align: 'right' }
+    M, 36, { width: W - 2 * M, align: 'right' }
   );
 
-  // Gold double hairline separator
-  const sepY = M + 50;
-  doc.strokeColor(GOLD).lineWidth(0.4);
-  doc.moveTo(M, sepY).lineTo(rightX, sepY).stroke();
-  doc.moveTo(M, sepY + 2).lineTo(rightX, sepY + 2).stroke();
+  // Body starts below the stripe
+  const sepY = stripeH + 18;
 
   // ─── buyer block ─────────────────────────────────────────────────────
   let y = sepY + 12;
@@ -214,6 +236,10 @@ export async function printSaleInvoice(db: Database.Database, saleId: number): P
   doc.font('Times-Italic').fontSize(7).fillColor(MUTED)
     .text('E&OE  ·  Goods once sold cannot be returned  ·  Subject to local jurisdiction',
           M, y - 4, { width: W - 2 * M, align: 'center' });
+
+  // Ledger-book page number, bottom-right
+  doc.font('Times-Italic').fontSize(7).fillColor(RULE)
+    .text(`p. ${sale.bill_no}`, W - M - 40, doc.page.height - 14, { width: 40, align: 'right' });
 
   doc.end();
   await new Promise<void>((resolve, reject) => {

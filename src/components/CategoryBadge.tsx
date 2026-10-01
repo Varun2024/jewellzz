@@ -1,14 +1,18 @@
+/* Small chip that shows an item's metal/stone category + optional stamp.
+ * Uses v2 tokens via inline styles — no class dependencies.
+ */
+
 import { Circle, Diamond, Sparkle } from '@phosphor-icons/react';
 
 type Cat = 'gold' | 'silver' | 'stone' | 'artificial';
 
-const CFG: Record<Cat, { label: string; icon: any; fill: string; bg: string; border: string }> = {
+const CFG: Record<Cat, { label: string; icon: typeof Circle; fill: string; bg: string; border: string }> = {
   gold: {
     label: 'gold',
     icon: Circle,
-    fill: '#8E6A20',
-    bg: 'rgba(184, 137, 46, 0.12)',
-    border: 'rgba(184, 137, 46, 0.35)',
+    fill: 'var(--accent-press, #8A6420)',
+    bg: 'color-mix(in oklab, var(--accent, #B8892E) 12%, transparent)',
+    border: 'color-mix(in oklab, var(--accent, #B8892E) 35%, transparent)',
   },
   silver: {
     label: 'silver',
@@ -27,20 +31,30 @@ const CFG: Record<Cat, { label: string; icon: any; fill: string; bg: string; bor
   artificial: {
     label: 'artificial',
     icon: Sparkle,
-    fill: '#7A6E64',
-    bg: 'rgba(122, 110, 100, 0.10)',
-    border: 'rgba(122, 110, 100, 0.30)',
+    fill: 'var(--text-mute, #7A6E64)',
+    bg: 'color-mix(in oklab, currentColor 10%, transparent)',
+    border: 'color-mix(in oklab, currentColor 25%, transparent)',
   },
 };
 
-export function CategoryBadge({ category, stamp, size = 'sm' }: { category: Cat; stamp?: string | null; size?: 'sm' | 'md' }) {
+export function CategoryBadge({
+  category,
+  stamp,
+  size = 'sm',
+}: {
+  category: Cat;
+  stamp?: string | null;
+  size?: 'sm' | 'md';
+}) {
   const cfg = CFG[category];
   const Icon = cfg.icon;
   const isMd = size === 'md';
   return (
     <span
-      className="inline-flex items-center gap-1 rounded"
       style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
         background: cfg.bg,
         border: `1px solid ${cfg.border}`,
         color: cfg.fill,
@@ -50,14 +64,19 @@ export function CategoryBadge({ category, stamp, size = 'sm' }: { category: Cat;
         letterSpacing: '0.03em',
         lineHeight: 1.3,
         whiteSpace: 'nowrap',
+        borderRadius: 3,
       }}
     >
       <Icon size={isMd ? 10 : 8} weight="fill" />
       <span style={{ textTransform: 'lowercase' }}>{cfg.label}</span>
       {stamp && (
         <span
-          className="mono"
-          style={{ fontSize: isMd ? 10 : 9, opacity: 0.75, marginLeft: 2 }}
+          style={{
+            fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+            fontSize: isMd ? 10 : 9,
+            opacity: 0.75,
+            marginLeft: 2,
+          }}
         >
           {stamp}
         </span>
