@@ -6,9 +6,13 @@ type Props = {
   // 'ink' = default (ink on paper), 'gold' = full gold, 'reverse' = paper on ink
   variant?: 'ink' | 'gold' | 'reverse';
   className?: string;
+  // When true, the gem breathes — used after ~60s of app idle.
+  idle?: boolean;
+  // When true, the gem gives a single greeting pulse on mount.
+  boot?: boolean;
 };
 
-export function LogoMark({ size = 24, variant = 'ink', className }: Props) {
+export function LogoMark({ size = 24, variant = 'ink', className, idle = false, boot = false }: Props) {
   const stroke = variant === 'reverse' ? 'var(--paper)' : variant === 'gold' ? 'var(--gold-700)' : 'var(--ink-950)';
   const gem = variant === 'reverse' ? 'var(--gold-500)' : 'var(--gold-500)';
   return (
@@ -39,8 +43,12 @@ export function LogoMark({ size = 24, variant = 'ink', className }: Props) {
         strokeLinecap="round"
         fill="none"
       />
-      {/* gem sitting in the pan */}
-      <circle cx="16" cy="20.5" r="1.9" fill={gem} />
+      {/* gem sitting in the pan; pulses when the app has been idle, or once on boot */}
+      <circle
+        cx="16" cy="20.5" r="1.9" fill={gem}
+        className={idle ? 'gem-pulse' : boot ? 'gem-boot' : undefined}
+        style={{ transformOrigin: '16px 20.5px' }}
+      />
     </svg>
   );
 }
