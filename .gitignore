@@ -45,3 +45,4 @@ invoices/
 exports/
 backups/
 .claude/
+smoke.json

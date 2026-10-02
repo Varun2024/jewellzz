@@ -1,11 +1,16 @@
+/* Repairs — customer brings item for work. Ported to v2 primitives. */
+
 import { useState } from 'react';
 import { Plus } from '@phosphor-icons/react';
 import { CH, invoke } from '@/lib/ipc';
 import { useAsync, useMutation } from '@/lib/useAsync';
-import { fmtPaise, gramsToMg, rupeesToPaise } from '@/lib/format';
-import { ErrorBanner, LoadingBlock, EmptyState, Spinner } from '@/components/Status';
+import { gramsToMg, rupeesToPaise } from '@/lib/format';
 import type { Party, Karigar } from '@shared/ipc';
 import { StatusChip, fmtDate } from './shared';
+import {
+  Sheet, Button, Field, Rupee, Progress, Empty,
+} from '@/components/ui';
+import { useHotkey } from '@/lib/useHotkey';
 
 const CAT = ['gold', 'silver', 'stone', 'artificial'] as const;
 
@@ -35,8 +40,8 @@ export function RepairsTab() {
 
   async function submit() {
     setErr(''); post.clearError();
-    if (!partyId) return setErr('pick a party');
-    if (!description.trim()) return setErr('description required');
+    if (!partyId)              return setErr('pick a party');
+    if (!description.trim())   return setErr('description required');
     try {
       await post.run({
         partyId, description,
@@ -71,146 +76,183 @@ export function RepairsTab() {
     } catch { /* surfaced */ }
   }
 
-  if (list.error) return <ErrorBanner message={list.error} onDismiss={() => list.reload()} />;
+  useHotkey('n', () => setShowForm(true), !showForm && !deliverRow);
+  useHotkey('Escape', () => { setShowForm(false); setDeliverRow(null); }, showForm || !!deliverRow);
+
+  if (list.error) return <InlineAlert message={list.error} onDismiss={() => list.reload()} />;
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <p className="text-sm text-[var(--ink-500)]">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s4)' }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--s3)',
+        padding: 'var(--s3)',
+        background: 'var(--surface-hi)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-1)',
+      }}>
+        <div style={{ fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>
           Customer's item comes in → assign karigar → mark ready → deliver &amp; charge. Shop stock is not affected.
-        </p>
+        </div>
         {!showForm && (
-          <button className="btn-primary" onClick={() => setShowForm(true)}>
-            <Plus size={12} weight="bold" /> New repair
-          </button>
+          <Button variant="primary" kbd="N" onClick={() => setShowForm(true)} leading={<Plus size={12} weight="bold" />}>
+            New repair
+          </Button>
         )}
       </div>
 
       {showForm && (
-        <div className="card space-y-3">
-          <div className="section-label">— new repair slip ———————</div>
-          <div className="grid grid-cols-3 gap-3">
-            <label className="text-xs text-[var(--ink-500)]">Party
-              <select className="input w-full" value={partyId ?? ''} onChange={(e) => setPartyId(Number(e.target.value) || null)}>
+        <Sheet title="New repair slip">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+            <div className="field">
+              <label className="field__label">Party</label>
+              <select className="input" value={partyId ?? ''} onChange={(e) => setPartyId(Number(e.target.value) || null)}>
                 <option value="">— pick —</option>
                 {(parties.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Assign karigar (optional)
-              <select className="input w-full" value={karigarId ?? ''} onChange={(e) => setKarigarId(Number(e.target.value) || null)}>
+            </div>
+            <div className="field">
+              <label className="field__label">Assign karigar (optional)</label>
+              <select className="input" value={karigarId ?? ''} onChange={(e) => setKarigarId(Number(e.target.value) || null)}>
                 <option value="">— none —</option>
                 {(karigars.data ?? []).map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
               </select>
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Promised delivery
-              <input type="date" className="input w-full" value={promised} onChange={(e) => setPromised(e.target.value)} />
-            </label>
+            </div>
+            <Field label="Promised delivery" type="date" value={promised} onChange={(e) => setPromised(e.target.value)} />
           </div>
 
-          <label className="text-xs text-[var(--ink-500)] block">Description
-            <input required className="input w-full" placeholder="e.g. 22k gold chain, clasp broken"
-                   value={description} onChange={(e) => setDescription(e.target.value)} />
-          </label>
+          <div style={{ marginBottom: 'var(--s3)' }}>
+            <Field
+              label="Description"
+              required
+              placeholder="e.g. 22k gold chain, clasp broken"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
 
-          <div className="section-label mt-2">— customer material (optional) ———</div>
-          <div className="grid grid-cols-3 gap-3">
-            <label className="text-xs text-[var(--ink-500)]">Category
-              <select className="input w-full" value={material.cat} onChange={(e) => setMaterial({ ...material, cat: e.target.value })}>
+          <SectionLabel>Customer material (optional)</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+            <div className="field">
+              <label className="field__label">Category</label>
+              <select className="input" value={material.cat} onChange={(e) => setMaterial({ ...material, cat: e.target.value })}>
                 <option value="">— none —</option>
                 {CAT.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Stamp
-              <input className="input w-full mono" value={material.stamp} onChange={(e) => setMaterial({ ...material, stamp: e.target.value })} />
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Weight (g)
-              <input type="number" step="0.001" className="input w-full mono" value={material.weightG}
-                     onChange={(e) => setMaterial({ ...material, weightG: Number(e.target.value) || 0 })} />
-            </label>
+            </div>
+            <Field label="Stamp" value={material.stamp}
+                   onChange={(e) => setMaterial({ ...material, stamp: e.target.value })} />
+            <Field label="Weight (g)" numeric type="number" step="0.001" value={material.weightG}
+                   onChange={(e) => setMaterial({ ...material, weightG: Number(e.target.value) || 0 })} />
           </div>
 
-          <div className="section-label mt-2">— charges ————————</div>
-          <div className="grid grid-cols-3 gap-3">
-            <label className="text-xs text-[var(--ink-500)]">Addition (₹)
-              <input type="number" step="0.01" className="input w-full mono" value={addition}
-                     onChange={(e) => setAddition(Number(e.target.value) || 0)} />
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Labour (₹)
-              <input type="number" step="0.01" className="input w-full mono" value={labour}
-                     onChange={(e) => setLabour(Number(e.target.value) || 0)} />
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Notes
-              <input className="input w-full" value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </label>
+          <SectionLabel>Charges</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+            <Field label="Addition (₹)" numeric type="number" step="0.01" value={addition}
+                   onChange={(e) => setAddition(Number(e.target.value) || 0)} />
+            <Field label="Labour (₹)" numeric type="number" step="0.01" value={labour}
+                   onChange={(e) => setLabour(Number(e.target.value) || 0)} />
+            <Field label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
 
-          <div className="flex gap-2 items-center">
-            <button className="btn-primary" onClick={submit} disabled={post.loading}>
-              {post.loading ? <Spinner label="posting" /> : 'Post repair'}
-            </button>
-            <button className="btn" onClick={() => setShowForm(false)}>Cancel</button>
-            {err && <ErrorBanner message={err} onDismiss={() => setErr('')} />}
-            {post.error && <ErrorBanner message={post.error} onDismiss={post.clearError} />}
+          <div style={{ display: 'flex', gap: 'var(--s2)', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button variant="primary" onClick={submit} disabled={post.loading}>
+              {post.loading ? 'Posting…' : 'Post repair'}
+            </Button>
+            <Button onClick={() => setShowForm(false)}>Cancel</Button>
+            {err && <InlineAlert message={err} onDismiss={() => setErr('')} />}
+            {post.error && <InlineAlert message={post.error} onDismiss={post.clearError} />}
           </div>
-        </div>
+        </Sheet>
       )}
 
-      {statusMut.error && <ErrorBanner message={statusMut.error} onDismiss={statusMut.clearError} />}
-      {deliverMut.error && <ErrorBanner message={deliverMut.error} onDismiss={deliverMut.clearError} />}
+      {statusMut.error && <InlineAlert message={statusMut.error} onDismiss={statusMut.clearError} />}
+      {deliverMut.error && <InlineAlert message={deliverMut.error} onDismiss={deliverMut.clearError} />}
 
       {deliverRow && (
-        <div className="card space-y-3" style={{ borderColor: 'var(--gold-500)' }}>
-          <div className="section-label">— deliver {deliverRow.slipNo} ———</div>
-          <div className="text-sm">
-            <div><b>{deliverRow.description}</b></div>
-            <div className="text-[var(--ink-500)]">Total due <span className="mono text-[var(--ink-950)]">{fmtPaise(deliverRow.totalPaise)}</span></div>
+        <Sheet
+          title={`Deliver ${deliverRow.slipNo}`}
+          style={{ borderColor: 'var(--accent)' }}
+        >
+          <div style={{ fontSize: 'var(--t-sm)', marginBottom: 'var(--s3)' }}>
+            <div style={{ fontWeight: 500 }}>{deliverRow.description}</div>
+            <div style={{ color: 'var(--text-mute)' }}>
+              Total due · <Rupee paise={deliverRow.totalPaise} />
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-xs text-[var(--ink-500)]">Cash (₹)
-              <input type="number" step="0.01" className="input w-full mono" value={payCash} onChange={(e) => setPayCash(Number(e.target.value) || 0)} />
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Bank (₹)
-              <input type="number" step="0.01" className="input w-full mono" value={payBank} onChange={(e) => setPayBank(Number(e.target.value) || 0)} />
-            </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+            <Field label="Cash (₹)" numeric type="number" step="0.01" value={payCash}
+                   onChange={(e) => setPayCash(Number(e.target.value) || 0)} />
+            <Field label="Bank (₹)" numeric type="number" step="0.01" value={payBank}
+                   onChange={(e) => setPayBank(Number(e.target.value) || 0)} />
           </div>
-          <div className="flex gap-2 items-center">
-            <button className="btn-primary" onClick={doDeliver} disabled={deliverMut.loading}>
-              {deliverMut.loading ? <Spinner label="delivering" /> : 'Confirm delivery'}
-            </button>
-            <button className="btn" onClick={() => setDeliverRow(null)}>Cancel</button>
+          <div style={{ display: 'flex', gap: 'var(--s2)' }}>
+            <Button variant="primary" onClick={doDeliver} disabled={deliverMut.loading}>
+              {deliverMut.loading ? 'Delivering…' : 'Confirm delivery'}
+            </Button>
+            <Button onClick={() => setDeliverRow(null)}>Cancel</Button>
           </div>
-        </div>
+        </Sheet>
       )}
 
-      {list.loading ? <LoadingBlock label="loading repairs…" /> : (
-        <table className="ledger-table">
-          <thead><tr>
-            <th>Slip</th><th>Date</th><th>Party</th><th>Description</th>
-            <th>Karigar</th><th>Promised</th>
-            <th className="text-right">Total</th><th>Status</th><th></th>
-          </tr></thead>
-          <tbody>
-            {(list.data ?? []).map((r) => (
-              <tr key={r.id}>
-                <td className="mono">{r.slipNo}</td>
-                <td className="mono text-[11px] text-[var(--ink-500)]">{fmtDate(r.ts)}</td>
-                <td>{r.partyName}</td>
-                <td style={{ maxWidth: 180 }} className="truncate">{r.description}</td>
-                <td className="text-[var(--ink-500)]">{r.karigarName ?? '—'}</td>
-                <td className="mono text-[11px] text-[var(--ink-500)]">{r.promisedDate || '—'}</td>
-                <td className="num">{fmtPaise(r.totalPaise)}</td>
-                <td><StatusChip status={r.status} /></td>
-                <td className="text-right">
-                  {r.status === 'received' && <button className="link" onClick={() => moveStatus(r.id, 'in_progress')}>start</button>}
-                  {r.status === 'in_progress' && <button className="link" onClick={() => moveStatus(r.id, 'ready')}>ready</button>}
-                  {r.status === 'ready' && <button className="link" onClick={() => { setDeliverRow(r); setPayCash(r.totalPaise / 100); setPayBank(0); }}>deliver</button>}
-                </td>
-              </tr>
-            ))}
-            {(list.data?.length ?? 0) === 0 && <tr><td colSpan={9}><EmptyState hint="Create a repair when a customer brings an item in for work">no repairs yet</EmptyState></td></tr>}
-          </tbody>
-        </table>
-      )}
+      <Sheet title="Repairs" flush>
+        {list.loading ? <div style={{ padding: 12 }}><Progress /></div>
+          : (list.data?.length ?? 0) === 0 ? <Empty mark="bell" title="No repairs yet">Create one when a customer brings an item in for work.</Empty>
+          : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 100 }}>Slip</th>
+                  <th style={{ width: 90 }}>Date</th>
+                  <th style={{ width: 140 }}>Party</th>
+                  <th>Description</th>
+                  <th style={{ width: 110 }}>Karigar</th>
+                  <th style={{ width: 100 }}>Promised</th>
+                  <th className="num" style={{ width: 130 }}>Total</th>
+                  <th style={{ width: 110 }}>Status</th>
+                  <th style={{ width: 90 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {(list.data ?? []).map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)' }}>{r.slipNo}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--text-mute)' }}>{fmtDate(r.ts)}</td>
+                    <td>{r.partyName}</td>
+                    <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
+                    <td style={{ color: 'var(--text-mute)', fontSize: 'var(--t-sm)' }}>{r.karigarName ?? '—'}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--text-mute)' }}>{r.promisedDate || '—'}</td>
+                    <td className="num"><Rupee paise={r.totalPaise} /></td>
+                    <td><StatusChip status={r.status} /></td>
+                    <td className="num">
+                      {r.status === 'received'    && <Button variant="link" onClick={() => moveStatus(r.id, 'in_progress')}>start</Button>}
+                      {r.status === 'in_progress' && <Button variant="link" onClick={() => moveStatus(r.id, 'ready')}>ready</Button>}
+                      {r.status === 'ready'       && <Button variant="link" onClick={() => { setDeliverRow(r); setPayCash(r.totalPaise / 100); setPayBank(0); }}>deliver</Button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </Sheet>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 'var(--t-sm)', color: 'var(--text-mute)',
+      textTransform: 'uppercase', letterSpacing: '0.04em',
+      marginBottom: 'var(--s2)',
+    }}>{children}</div>
+  );
+}
+
+function InlineAlert({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="alert">
+      <span style={{ whiteSpace: 'pre-wrap' }}>{message}</span>
+      {onDismiss && <button className="alert__dismiss" onClick={onDismiss} aria-label="dismiss">×</button>}
     </div>
   );
 }

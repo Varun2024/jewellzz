@@ -1,10 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+/* Sale screen — ported to the v2 design system (see design-system.md).
+ *
+ * The useSaleDraft hook is unchanged; only presentation moved. Keyboard flow
+ * is preserved: type party, Enter picks first hit, cursor jumps to item,
+ * Enter adds, F9 posts + prints.
+ */
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CH, invoke } from '@/lib/ipc';
 import { useMutation, errText } from '@/lib/useAsync';
-import { fmtPaise } from '@/lib/format';
-import { ErrorBanner, Spinner, LoadingBlock } from '@/components/Status';
 import type { Item, Party, SearchHit, SalePosted, MetalRate } from '@shared/ipc';
 import { useSaleDraft, type RateMap } from './useSaleDraft';
+import { useAnimatedNumber } from '@/lib/useAnimatedNumber';
+import { Weighing } from '@/components/Weighing';
+import { bell as playBell } from '@/lib/sound';
+import {
+  Sheet, Row, Button, Field, Rupee, Weight, Pill, Progress, Empty, toast,
+} from '@/components/ui';
 
 export function SaleScreen() {
   const [companyStateCode, setCompanyStateCode] = useState('');
@@ -19,6 +30,17 @@ export function SaleScreen() {
   const [bootErr, setBootErr] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const [lastPosted, setLastPosted] = useState<SalePosted | null>(null);
+  // Reserved emphasize moment on the TOTAL row — fires once per successful post.
+  const [emphasizePost, setEmphasizePost] = useState(false);
+  // Short accent wash whenever the running total actually ticks. Distinct
+  // animation from the reserved post-success emphasize moment. The ref starts
+  // at `-1` so the first legitimate change seeds `prev` without firing a
+  // cosmetic flash on initial mount.
+  const prevTotalRef = useRef<number>(-1);
+  const [totalTickKey, setTotalTickKey] = useState(0);
+  // The Weighing — signature identity animation. Shown ~1.4s on sale-post success.
+  const [weighingBill, setWeighingBill] = useState<string | null>(null);
+
   const postMut = useMutation<any, SalePosted>((p) => invoke(CH.salePost, p));
   const printMut = useMutation<{ id: number }, unknown>((p) => invoke(CH.salePrint, p));
 
@@ -28,6 +50,23 @@ export function SaleScreen() {
   const {
     draft, setDraft, addLine, updLine, delLine, reset, totals, interstate, toPayload,
   } = useSaleDraft(companyStateCode, rates);
+
+  // Bump a key whenever `totals.total` changes value — React re-mounts the
+  // flash wrapper, replaying the `.num-tick` keyframe exactly once per edit.
+  // Skip the very first change (prev === -1) so the mount flash is suppressed.
+  useMemo(() => {
+    if (prevTotalRef.current === -1) {
+      prevTotalRef.current = totals.total;
+      return;
+    }
+    if (prevTotalRef.current !== totals.total) {
+      prevTotalRef.current = totals.total;
+      setTotalTickKey((k) => k + 1);
+    }
+  }, [totals.total]);
+
+  // Smoothly roll the TOTAL from its previous value to the new one.
+  const liveTotal = useAnimatedNumber(totals.total, 420);
 
   useEffect(() => {
     (async () => {
@@ -52,7 +91,7 @@ export function SaleScreen() {
     })();
   }, []);
 
-  // debounce party search
+  // debounced party search
   useEffect(() => {
     if (!partyQ.trim() || draft.partyId) { setPartyHits([]); return; }
     const t = setTimeout(async () => {
@@ -63,7 +102,7 @@ export function SaleScreen() {
     return () => clearTimeout(t);
   }, [partyQ, draft.partyId, parties]);
 
-  // debounce item search
+  // debounced item search
   useEffect(() => {
     if (!itemQ.trim()) { setItemHits([]); return; }
     const t = setTimeout(async () => {
@@ -88,7 +127,6 @@ export function SaleScreen() {
     setPartyQ(p.name); setPartyHits([]);
     setTimeout(() => itemInputRef.current?.focus(), 20);
   }
-
   function pickItem(it: Item) {
     addLine(it);
     setItemQ(''); setItemHits([]);
@@ -103,265 +141,506 @@ export function SaleScreen() {
     try {
       const res = await postMut.run(payload);
       setLastPosted(res);
+      setEmphasizePost(true);
+      setTimeout(() => setEmphasizePost(false), 500);
+      setWeighingBill(res.billNo);
+      setTimeout(() => setWeighingBill(null), 1400);
+      playBell();
       try { await printMut.run({ id: res.id }); } catch { /* print is best-effort */ }
+      toast.success(`Bill ${res.billNo} posted`, {
+        action: { label: 'print again', onClick: () => printMut.run({ id: res.id }) },
+      });
       reset();
       setPartyQ(''); setItemQ('');
       partyInputRef.current?.focus();
     } catch { /* postMut.error surfaces below */ }
   }
 
-  if (bootLoading) return <LoadingBlock label="loading sale screen…" />;
-  if (bootErr) return <ErrorBanner message={bootErr} onDismiss={() => window.location.reload()} />;
+  if (bootLoading) {
+    return (
+      <div className="ds-v2" style={{ padding: 16 }}>
+        <Progress />
+        <div style={{
+          marginTop: 8, fontSize: 'var(--t-sm)',
+          color: 'var(--text-mute)', textTransform: 'uppercase', letterSpacing: '0.08em',
+        }}>opening the ledger…</div>
+      </div>
+    );
+  }
+  if (bootErr) {
+    return (
+      <div className="ds-v2" style={{ padding: 16 }}>
+        <InlineAlert message={bootErr} onDismiss={() => window.location.reload()} />
+      </div>
+    );
+  }
+
+  const canPost = !!draft.partyId && draft.lines.length > 0 && !postMut.loading && !printMut.loading;
 
   return (
-    <div className="grid grid-cols-[1fr_320px] gap-4 h-full">
-      <div className="space-y-3 min-w-0">
-        {/* Party picker */}
-        <div className="flex gap-3 items-end">
-          <div className="relative flex-1">
-            <label className="section-label block mb-1">
-              — buyer ————————{draft.partyId ? <span className="text-[var(--moss-600)] not-italic ml-2">✓</span> : <span className="text-[var(--amber-500)] not-italic ml-2">select from list</span>}
-            </label>
-            <input
-              ref={partyInputRef} className="input w-full"
-              value={partyQ}
-              onChange={(e) => { setPartyQ(e.target.value); setDraft((d) => ({ ...d, partyId: null, partyStateCode: '' })); }}
+    <div
+      className="ds-v2"
+      style={{
+        padding: 'var(--container-pad)',
+        height: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 340px',
+        gap: 'var(--s4)',
+        height: '100%',
+        minHeight: 0,
+      }}>
+        {/* ---------- MAIN COLUMN ---------- */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s3)', minWidth: 0 }}>
+
+          {/* Party picker */}
+          <div style={{ display: 'flex', gap: 'var(--s3)', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1, position: 'relative' }}>
+              <Field
+                label={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    Buyer
+                    {draft.partyId
+                      ? <Pill tone="pos">selected</Pill>
+                      : <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--text-faint)' }}>
+                          — type a name, then ↵
+                        </span>}
+                  </span>
+                }
+                inputRef={partyInputRef}
+                value={partyQ}
+                onChange={(e) => {
+                  setPartyQ(e.target.value);
+                  setDraft((d) => ({ ...d, partyId: null, partyStateCode: '' }));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && partyHits[0]) { e.preventDefault(); pickParty(partyHits[0]); }
+                }}
+                placeholder="customer name"
+              />
+              {partyHits.length > 0 && (
+                <div className="menu">
+                  {partyHits.map((p, i) => (
+                    <button
+                      key={p.id}
+                      className="menu__item"
+                      data-focused={i === 0 ? 'true' : undefined}
+                      onClick={() => pickParty(p)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                        <span>{p.name}</span>
+                        <span style={{
+                          fontSize: 'var(--t-xs)', color: 'var(--text-mute)',
+                          textTransform: 'uppercase', letterSpacing: '0.08em',
+                        }}>{p.role}</span>
+                      </div>
+                      <div className="menu__item__meta">
+                        {p.phone ?? '—'} · {p.stateCode || 'no state'}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ paddingBottom: 4 }}>
+              {draft.partyId && (
+                <Pill tone={interstate ? 'accent' : 'default'}>
+                  {interstate ? 'IGST · interstate' : 'CGST + SGST'}
+                </Pill>
+              )}
+            </div>
+          </div>
+
+          {/* Item picker */}
+          <div style={{ position: 'relative' }}>
+            <Field
+              label="Add item"
+              inputRef={itemInputRef}
+              value={itemQ}
+              onChange={(e) => setItemQ(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && partyHits[0]) { e.preventDefault(); pickParty(partyHits[0]); }
+                if (e.key === 'Enter' && itemHits[0]) { e.preventDefault(); pickItem(itemHits[0]); }
               }}
-              placeholder="type customer name, then Enter…"
+              placeholder="scan SKU or search item"
             />
-            {partyHits.length > 0 && (
-              <div className="absolute z-10 bg-white border border-border rounded shadow w-full max-h-56 overflow-auto mt-1">
-                {partyHits.map((p, i) => (
-                  <button key={p.id} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-hover)] ${i === 0 ? 'bg-[var(--bg-hover)]/50' : ''}`} onClick={() => pickParty(p)}>
-                    <div className="flex justify-between"><span>{p.name}</span><span className="text-xs text-muted">{p.role}</span></div>
-                    <div className="text-xs text-muted mono">{p.phone ?? ''} · {p.stateCode || '—'}</div>
+            {itemHits.length > 0 && (
+              <div className="menu">
+                {itemHits.map((it, i) => (
+                  <button
+                    key={it.id}
+                    className="menu__item"
+                    data-focused={i === 0 ? 'true' : undefined}
+                    onClick={() => pickItem(it)}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                      <span>{it.name}</span>
+                      <span style={{
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--text-mute)',
+                        fontSize: 'var(--t-sm)',
+                      }}>{it.sku}</span>
+                    </div>
+                    <div className="menu__item__meta">
+                      {it.category}{it.stamp ? ` · ${it.stamp}` : ''} · {it.unit}
+                    </div>
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <div className="text-[11px] mono tracking-wider whitespace-nowrap uppercase pb-1">
-            {interstate
-              ? <span className="text-[var(--amber-500)]">IGST · interstate</span>
-              : <span className="text-[var(--ink-500)]">CGST + SGST</span>}
-          </div>
+
+          {/* Lines table */}
+          <Sheet flush style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            {draft.lines.length === 0 ? (
+              <Empty mark="case" title="No lines yet">
+                Pick an item above — scan a SKU or search — and press ↵ to begin the bill.
+              </Empty>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th className="num" style={{ width: 60 }}>Qty</th>
+                    <th className="num" style={{ width: 92 }}>Weight</th>
+                    <th className="num" style={{ width: 108 }}>Rate</th>
+                    <th className="num" style={{ width: 128 }}>Making</th>
+                    <th className="num" style={{ width: 128 }}>Wastage</th>
+                    <th className="num" style={{ width: 120 }}>Taxable</th>
+                    <th className="num" style={{ width: 100 }}>Tax</th>
+                    <th className="num" style={{ width: 120 }}>Total</th>
+                    <th style={{ width: 28 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {draft.lines.map((l, i) => {
+                    const t = totals.perLine[i];
+                    return (
+                      <tr key={l.key} className="row-enter">
+                        <td>
+                          <div>{l.description}</div>
+                          <div style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 'var(--t-xs)',
+                            color: 'var(--text-mute)',
+                          }}>
+                            {l.category}{l.stamp ? ` · ${l.stamp}` : ''} · {l.unit}
+                          </div>
+                        </td>
+                        <td className="num">
+                          <input
+                            className="input input--num"
+                            style={{ width: 48, height: 24 }}
+                            type="number" step="1"
+                            value={l.qty}
+                            onChange={(e) => updLine(l.key, { qty: Number(e.target.value) || 0 })}
+                          />
+                        </td>
+                        <td className="num">
+                          {l.unit === 'pcs'
+                            ? <span style={{ color: 'var(--text-faint)' }}>—</span>
+                            : <input
+                                className="input input--num"
+                                style={{ width: 76, height: 24 }}
+                                type="number" step="0.001"
+                                value={l.weight}
+                                onChange={(e) => updLine(l.key, { weight: Number(e.target.value) || 0 })}
+                              />}
+                        </td>
+                        <td className="num">
+                          <input
+                            className="input input--num"
+                            style={{ width: 92, height: 24 }}
+                            type="number" step="0.01"
+                            value={l.ratePerUnit}
+                            onChange={(e) => updLine(l.key, { ratePerUnit: Number(e.target.value) || 0 })}
+                          />
+                        </td>
+                        <td className="num">
+                          <ChargeCell
+                            value={l.makingValue}
+                            mode={l.makingMode}
+                            onChange={(patch) => updLine(l.key, {
+                              makingValue: patch.value ?? l.makingValue,
+                              makingMode: patch.mode ?? l.makingMode,
+                            })}
+                          />
+                        </td>
+                        <td className="num">
+                          <ChargeCell
+                            value={l.wastageValue}
+                            mode={l.wastageMode}
+                            onChange={(patch) => updLine(l.key, {
+                              wastageValue: patch.value ?? l.wastageValue,
+                              wastageMode: patch.mode ?? l.wastageMode,
+                            })}
+                          />
+                        </td>
+                        <td className="num"><Rupee paise={t.taxable} /></td>
+                        <td className="num"><Rupee paise={t.cgst + t.sgst + t.igst} /></td>
+                        <td className="num"><Rupee paise={t.total} /></td>
+                        <td className="num">
+                          <button
+                            onClick={() => delLine(l.key)}
+                            aria-label="remove line"
+                            style={{
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              color: 'var(--text-faint)',
+                              fontSize: 16, lineHeight: 1,
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--neg)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-faint)')}
+                          >×</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </Sheet>
         </div>
 
-        {/* Item picker */}
-        <div className="relative">
-          <label className="section-label block mb-1">— add item ————————</label>
-          <input
-            ref={itemInputRef} className="input w-full"
-            value={itemQ}
-            onChange={(e) => setItemQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && itemHits[0]) { e.preventDefault(); pickItem(itemHits[0]); }
-            }}
-            placeholder="scan SKU or search item, then Enter…"
-          />
-          {itemHits.length > 0 && (
-            <div className="absolute z-10 bg-white border border-border rounded shadow w-full max-h-64 overflow-auto mt-1">
-              {itemHits.map((it, i) => (
-                <button key={it.id} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-hover)] ${i === 0 ? 'bg-[var(--bg-hover)]/50' : ''}`} onClick={() => pickItem(it)}>
-                  <div className="flex justify-between">
-                    <span>{it.name}</span>
-                    <span className="text-xs text-muted mono">{it.sku}</span>
-                  </div>
-                  <div className="text-xs text-muted mono">{it.category}{it.stamp ? ` · ${it.stamp}` : ''} · {it.unit}</div>
-                </button>
-              ))}
+        {/* ---------- RIGHT RAIL ---------- */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s3)', minHeight: 0, position: 'relative' }}>
+          {weighingBill && (
+            <div key={weighingBill} className="weighing-stage">
+              <Weighing size={72} />
+              <div className="weighing-caption">bill {weighingBill} · weighed</div>
+            </div>
+          )}
+
+          <Sheet title="Totals">
+            <dl className="kv">
+              <dt>Subtotal</dt>
+              <dd><Rupee paise={totals.subtotal} /></dd>
+              {totals.cgst > 0 && (<><dt>CGST</dt><dd><Rupee paise={totals.cgst} /></dd></>)}
+              {totals.sgst > 0 && (<><dt>SGST</dt><dd><Rupee paise={totals.sgst} /></dd></>)}
+              {totals.igst > 0 && (<><dt>IGST</dt><dd><Rupee paise={totals.igst} /></dd></>)}
+              <dt>Discount <span style={{ color: 'var(--text-faint)' }}>₹</span></dt>
+              <dd>
+                <input
+                  className="input input--num"
+                  style={{ width: 100, height: 24 }}
+                  type="number" step="0.01"
+                  value={draft.discount}
+                  onChange={(e) => setDraft((d) => ({ ...d, discount: Number(e.target.value) || 0 }))}
+                />
+              </dd>
+              <dt>Round-off <span style={{ color: 'var(--text-faint)' }}>₹</span></dt>
+              <dd>
+                <input
+                  className="input input--num"
+                  style={{ width: 100, height: 24 }}
+                  type="number" step="0.01"
+                  value={draft.roundOff}
+                  onChange={(e) => setDraft((d) => ({ ...d, roundOff: Number(e.target.value) || 0 }))}
+                />
+              </dd>
+            </dl>
+            <div className="keyline-gold" style={{ marginTop: 'var(--s3)' }}>
+              <Row
+                emphasize={emphasizePost}
+                style={{
+                  minHeight: 'auto', padding: '4px 0 4px 10px',
+                  border: 'none', background: 'transparent',
+                }}
+              >
+                <span className="kv__grand-label" style={{ flex: 1 }}>Total</span>
+                <span
+                  key={totalTickKey}
+                  className={totalTickKey > 0 && !emphasizePost ? 'kv__grand-value num-tick' : 'kv__grand-value'}
+                  style={{ padding: '0 4px' }}
+                >
+                  <Rupee paise={liveTotal} />
+                </span>
+              </Row>
+            </div>
+          </Sheet>
+
+          <Sheet title="Payment">
+            <dl className="kv">
+              <dt>Cash</dt>
+              <dd>
+                <input
+                  className="input input--num"
+                  style={{ width: 100, height: 24 }}
+                  type="number" step="0.01"
+                  value={draft.cash}
+                  onChange={(e) => setDraft((d) => ({ ...d, cash: Number(e.target.value) || 0 }))}
+                />
+              </dd>
+              <dt>Bank</dt>
+              <dd>
+                <input
+                  className="input input--num"
+                  style={{ width: 100, height: 24 }}
+                  type="number" step="0.01"
+                  value={draft.bank}
+                  onChange={(e) => setDraft((d) => ({ ...d, bank: Number(e.target.value) || 0 }))}
+                />
+              </dd>
+            </dl>
+            <div style={{
+              marginTop: 'var(--s3)',
+              paddingTop: 'var(--s3)',
+              borderTop: '1px solid var(--border)',
+            }}>
+              <div style={{
+                fontSize: 'var(--t-sm)', color: 'var(--text-mute)',
+                textTransform: 'uppercase', letterSpacing: '0.04em',
+                marginBottom: 'var(--s2)',
+              }}>
+                Old gold
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                <select
+                  className="input"
+                  style={{ height: 24, fontSize: 'var(--t-sm)' }}
+                  value={draft.oldGold?.category ?? 'gold'}
+                  onChange={(e) => setDraft((d) => ({
+                    ...d,
+                    oldGold: {
+                      category: e.target.value as 'gold' | 'silver',
+                      stamp: d.oldGold?.stamp ?? '22k',
+                      weight: d.oldGold?.weight ?? 0,
+                      rate: d.oldGold?.rate ?? 0,
+                    },
+                  }))}
+                >
+                  <option value="gold">gold</option>
+                  <option value="silver">silver</option>
+                </select>
+                <input
+                  className="input"
+                  style={{ height: 24, fontFamily: 'var(--font-mono)' }}
+                  placeholder="stamp"
+                  value={draft.oldGold?.stamp ?? ''}
+                  onChange={(e) => setDraft((d) => ({
+                    ...d,
+                    oldGold: {
+                      ...(d.oldGold ?? { category: 'gold', weight: 0, rate: 0 }),
+                      stamp: e.target.value,
+                    },
+                  }))}
+                />
+                <input
+                  className="input input--num"
+                  style={{ height: 24 }}
+                  placeholder="g"
+                  type="number" step="0.001"
+                  value={draft.oldGold?.weight ?? 0}
+                  onChange={(e) => setDraft((d) => ({
+                    ...d,
+                    oldGold: {
+                      ...(d.oldGold ?? { category: 'gold', stamp: '22k', rate: 0 }),
+                      weight: Number(e.target.value) || 0,
+                    },
+                  }))}
+                />
+                <input
+                  className="input input--num"
+                  style={{ height: 24 }}
+                  placeholder="₹/g"
+                  type="number" step="0.01"
+                  value={draft.oldGold?.rate ?? 0}
+                  onChange={(e) => setDraft((d) => ({
+                    ...d,
+                    oldGold: {
+                      ...(d.oldGold ?? { category: 'gold', stamp: '22k', weight: 0 }),
+                      rate: Number(e.target.value) || 0,
+                    },
+                  }))}
+                />
+              </div>
+            </div>
+            <div className="keyline-gold" style={{ marginTop: 'var(--s3)' }}>
+              <dl className="kv">
+                <dt>Paid</dt>
+                <dd><Rupee paise={totals.paid} /></dd>
+                <dt className="kv__grand-label">Balance</dt>
+                <dd className={`kv__grand-value ${totals.balance > 0 ? 'kv__neg' : totals.balance < 0 ? 'kv__pos' : ''}`}>
+                  <Rupee paise={totals.balance} />
+                </dd>
+              </dl>
+            </div>
+          </Sheet>
+
+          <Button
+            variant="primary"
+            kbd="F9"
+            onClick={post}
+            disabled={!canPost}
+            style={{ height: 40, fontSize: 'var(--t-md)' }}
+          >
+            {postMut.loading ? 'Weighing…'
+              : printMut.loading ? 'Printing…'
+              : 'Weigh & print'}
+          </Button>
+
+          {err && <InlineAlert message={err} onDismiss={() => setErr('')} />}
+          {postMut.error && <InlineAlert message={postMut.error} onDismiss={postMut.clearError} />}
+
+          {lastPosted && !err && !postMut.error && (
+            <div style={{
+              fontSize: 'var(--t-sm)', color: 'var(--text-mute)',
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+            }}>
+              <Pill tone="pos">weighed</Pill>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                bill {lastPosted.billNo} · <Rupee paise={lastPosted.totalPaise} />
+              </span>
             </div>
           )}
         </div>
-
-        {/* Lines */}
-        <div className="overflow-x-auto">
-          <table className="ledger-table" style={{ fontSize: 12 }}>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th className="text-right">Qty</th>
-                <th className="text-right">Weight</th>
-                <th className="text-right">Rate/unit</th>
-                <th className="text-right">Making</th>
-                <th className="text-right">Wastage</th>
-                <th className="text-right">Taxable</th>
-                <th className="text-right">Tax</th>
-                <th className="text-right">Total</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {draft.lines.map((l, i) => {
-                const t = totals.perLine[i];
-                return (
-                  <tr key={l.key} className="border-b border-border/50">
-                    <td className="py-1 pr-2">
-                      <div>{l.description}</div>
-                      <div className="text-muted mono">{l.category}{l.stamp ? ` · ${l.stamp}` : ''} · {l.unit}</div>
-                    </td>
-                    <td className="text-right">
-                      <input className="input w-14 text-right mono" type="number" step="1"
-                             value={l.qty} onChange={(e) => updLine(l.key, { qty: Number(e.target.value) || 0 })} />
-                    </td>
-                    <td className="text-right">
-                      {l.unit === 'pcs' ? <span className="text-muted">—</span> : (
-                        <input className="input w-20 text-right mono" type="number" step="0.001"
-                               value={l.weight} onChange={(e) => updLine(l.key, { weight: Number(e.target.value) || 0 })} />
-                      )}
-                    </td>
-                    <td className="text-right">
-                      <input className="input w-24 text-right mono" type="number" step="0.01"
-                             value={l.ratePerUnit} onChange={(e) => updLine(l.key, { ratePerUnit: Number(e.target.value) || 0 })} />
-                    </td>
-                    <td className="text-right">
-                      <div className="flex gap-1 justify-end">
-                        <input className="input w-16 text-right mono" type="number" step="0.01"
-                               value={l.makingValue} onChange={(e) => updLine(l.key, { makingValue: Number(e.target.value) || 0 })} />
-                        <select className="input" value={l.makingMode} onChange={(e) => updLine(l.key, { makingMode: e.target.value as any })}>
-                          <option value="pct">%</option><option value="per_gram">/g</option><option value="per_pcs">/pc</option>
-                        </select>
-                      </div>
-                    </td>
-                    <td className="text-right">
-                      <div className="flex gap-1 justify-end">
-                        <input className="input w-16 text-right mono" type="number" step="0.01"
-                               value={l.wastageValue} onChange={(e) => updLine(l.key, { wastageValue: Number(e.target.value) || 0 })} />
-                        <select className="input" value={l.wastageMode} onChange={(e) => updLine(l.key, { wastageMode: e.target.value as any })}>
-                          <option value="pct">%</option><option value="per_gram">/g</option><option value="per_pcs">/pc</option>
-                        </select>
-                      </div>
-                    </td>
-                    <td className="text-right mono">{fmtPaise(t.taxable)}</td>
-                    <td className="text-right mono">{fmtPaise(t.cgst + t.sgst + t.igst)}</td>
-                    <td className="text-right mono">{fmtPaise(t.total)}</td>
-                    <td className="text-right"><button className="link text-danger" onClick={() => delLine(l.key)}>×</button></td>
-                  </tr>
-                );
-              })}
-              {draft.lines.length === 0 && (
-                <tr><td colSpan={10} className="py-6 text-center text-muted">no lines yet</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Right rail — totals + payment + post */}
-      <div className="card space-y-4 h-fit sticky top-0">
-        <div className="section-label">— totals ———————————</div>
-        <TotalsBlock totals={totals} draft={draft} setDraft={setDraft} />
-        <PaymentBlock draft={draft} setDraft={setDraft} />
-
-        <div className="pt-3 border-t border-[var(--rule)]">
-          <dl className="totals">
-            <dt>Paid</dt>
-            <dd>{fmtPaise(totals.paid)}</dd>
-            <dt className="grand-label" style={{ fontSize: 12 }}>Balance</dt>
-            <dd className={`grand-value ${totals.balance > 0 ? 'warn' : totals.balance < 0 ? 'ok' : ''}`} style={{ fontSize: 16 }}>
-              {fmtPaise(totals.balance)}
-            </dd>
-          </dl>
-        </div>
-
-        <button
-          className="btn-primary w-full"
-          style={{ height: 40, fontSize: 14 }}
-          onClick={post}
-          disabled={postMut.loading || printMut.loading || !draft.partyId || draft.lines.length === 0}
-        >
-          {postMut.loading ? <Spinner label="posting" /> : printMut.loading ? <Spinner label="printing" /> : (
-            <>Post &amp; print<span className="kbd">F9</span></>
-          )}
-        </button>
-        {err && <ErrorBanner message={err} onDismiss={() => setErr('')} />}
-        {postMut.error && <ErrorBanner message={postMut.error} onDismiss={postMut.clearError} />}
-        {lastPosted && !err && !postMut.error && (
-          <div className="text-[11px] mono tracking-wider text-[var(--moss-600)]">
-            posted {lastPosted.billNo} · total {fmtPaise(lastPosted.totalPaise)}
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-function TotalsBlock({ totals, draft, setDraft }: any) {
+function ChargeCell({
+  value, mode, onChange,
+}: {
+  value: number;
+  mode: 'pct' | 'per_gram' | 'per_pcs';
+  onChange: (patch: { value?: number; mode?: 'pct' | 'per_gram' | 'per_pcs' }) => void;
+}) {
   return (
-    <dl className="totals">
-      <dt>Subtotal</dt>            <dd>{fmtPaise(totals.subtotal)}</dd>
-      {totals.cgst > 0 && (<><dt>CGST</dt><dd>{fmtPaise(totals.cgst)}</dd></>)}
-      {totals.sgst > 0 && (<><dt>SGST</dt><dd>{fmtPaise(totals.sgst)}</dd></>)}
-      {totals.igst > 0 && (<><dt>IGST</dt><dd>{fmtPaise(totals.igst)}</dd></>)}
-      <dt>
-        <span className="inline-flex items-center gap-2">
-          Discount <span className="text-[10px] text-[var(--ink-300)]">₹</span>
-        </span>
-      </dt>
-      <dd>
-        <input className="input w-24 text-right mono h-7" type="number" step="0.01"
-               value={draft.discount}
-               onChange={(e) => setDraft((d: any) => ({ ...d, discount: Number(e.target.value) || 0 }))} />
-      </dd>
-      <dt>
-        <span className="inline-flex items-center gap-2">
-          Round-off <span className="text-[10px] text-[var(--ink-300)]">₹</span>
-        </span>
-      </dt>
-      <dd>
-        <input className="input w-24 text-right mono h-7" type="number" step="0.01"
-               value={draft.roundOff}
-               onChange={(e) => setDraft((d: any) => ({ ...d, roundOff: Number(e.target.value) || 0 }))} />
-      </dd>
-      <div className="rule-double" />
-      <dt className="grand-label">Total</dt>
-      <dd className="grand-value">{fmtPaise(totals.total)}</dd>
-    </dl>
-  );
-}
-
-function PaymentBlock({ draft, setDraft }: any) {
-  return (
-    <div className="pt-3 border-t border-[var(--rule)]">
-      <div className="section-label mb-2">— payment ———</div>
-      <dl className="totals">
-        <dt>Cash</dt>
-        <dd>
-          <input className="input w-24 text-right mono h-7" type="number" step="0.01"
-                 value={draft.cash}
-                 onChange={(e) => setDraft((d: any) => ({ ...d, cash: Number(e.target.value) || 0 }))} />
-        </dd>
-        <dt>Bank</dt>
-        <dd>
-          <input className="input w-24 text-right mono h-7" type="number" step="0.01"
-                 value={draft.bank}
-                 onChange={(e) => setDraft((d: any) => ({ ...d, bank: Number(e.target.value) || 0 }))} />
-        </dd>
-      </dl>
-      <div className="section-label mt-3 mb-1">— old-gold ———</div>
-      <div className="grid grid-cols-4 gap-1">
-        <select
-          className="input col-span-1"
-          value={draft.oldGold?.category ?? 'gold'}
-          onChange={(e) => setDraft((d: any) => ({
-            ...d, oldGold: { category: e.target.value as any, stamp: d.oldGold?.stamp ?? '22k', weight: d.oldGold?.weight ?? 0, rate: d.oldGold?.rate ?? 0 },
-          }))}
-        >
-          <option value="gold">gold</option><option value="silver">silver</option>
-        </select>
-        <input className="input col-span-1 mono" placeholder="stamp"
-               value={draft.oldGold?.stamp ?? ''}
-               onChange={(e) => setDraft((d: any) => ({ ...d, oldGold: { ...(d.oldGold ?? { category: 'gold', weight: 0, rate: 0 }), stamp: e.target.value } }))} />
-        <input className="input col-span-1 mono" placeholder="g" type="number" step="0.001"
-               value={draft.oldGold?.weight ?? 0}
-               onChange={(e) => setDraft((d: any) => ({ ...d, oldGold: { ...(d.oldGold ?? { category: 'gold', stamp: '22k', rate: 0 }), weight: Number(e.target.value) || 0 } }))} />
-        <input className="input col-span-1 mono" placeholder="₹/g" type="number" step="0.01"
-               value={draft.oldGold?.rate ?? 0}
-               onChange={(e) => setDraft((d: any) => ({ ...d, oldGold: { ...(d.oldGold ?? { category: 'gold', stamp: '22k', weight: 0 }), rate: Number(e.target.value) || 0 } }))} />
-      </div>
+    <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+      <input
+        className="input input--num"
+        style={{ width: 60, height: 24 }}
+        type="number" step="0.01"
+        value={value}
+        onChange={(e) => onChange({ value: Number(e.target.value) || 0 })}
+      />
+      <select
+        className="input"
+        style={{ height: 24, fontSize: 'var(--t-sm)', padding: '0 4px' }}
+        value={mode}
+        onChange={(e) => onChange({ mode: e.target.value as 'pct' | 'per_gram' | 'per_pcs' })}
+      >
+        <option value="pct">%</option>
+        <option value="per_gram">/g</option>
+        <option value="per_pcs">/pc</option>
+      </select>
     </div>
   );
 }
 
+function InlineAlert({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="alert">
+      <span style={{ whiteSpace: 'pre-wrap' }}>{message}</span>
+      {onDismiss && (
+        <button className="alert__dismiss" onClick={onDismiss} aria-label="dismiss">×</button>
+      )}
+    </div>
+  );
+}
+
+/* Keep the `Weight` import live even if unused inline — some column cells use
+ * it in the printed register (see electron/print.ts). */
+void Weight;

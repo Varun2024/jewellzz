@@ -1,10 +1,13 @@
+/* Catalog — photo grid, collections, labels. Ported to v2 primitives. */
+
 import { useEffect, useState } from 'react';
 import { Plus, Printer, X, ImageSquare } from '@phosphor-icons/react';
 import { CH, invoke } from '@/lib/ipc';
 import { useAsync, useMutation } from '@/lib/useAsync';
-import { fmtGrams, fmtCarat } from '@/lib/format';
-import { ErrorBanner, LoadingBlock, EmptyState, Spinner } from '@/components/Status';
 import { CategoryBadge } from '@/components/CategoryBadge';
+import {
+  Button, Field, Weight, Num, Progress, Empty,
+} from '@/components/ui';
 
 type GridRow = {
   id: number; sku: string; name: string;
@@ -49,110 +52,131 @@ export function CatalogScreen() {
   }
 
   return (
-    <div className="max-w-6xl space-y-4">
-      {/* toolbar */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <input
-          className="input flex-1 min-w-[220px]"
-          placeholder="search name, SKU, or tag…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <select
-          className="input"
-          value={collectionId ?? ''}
-          onChange={(e) => setCollectionId(e.target.value === '' ? null : Number(e.target.value))}
-        >
-          <option value="">all collections</option>
-          {(collections.data ?? []).map((c) => (
-            <option key={c.id} value={c.id}>{c.name} ({c.itemCount})</option>
-          ))}
-        </select>
-        <CollectionsButton onSaved={() => collections.reload()} />
+    <div className="ds-v2" style={{ padding: 'var(--container-pad)', height: '100%', overflow: 'auto', boxSizing: 'border-box' }}>
+      <div style={{ maxWidth: 1200, display: 'flex', flexDirection: 'column', gap: 'var(--s4)' }}>
 
-        <div className="flex-1" />
+        {/* toolbar */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--s2)', flexWrap: 'wrap',
+          padding: 'var(--s3)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-1)',
+        }}>
+          <input
+            className="input"
+            style={{ flex: 1, minWidth: 220 }}
+            placeholder="search name, SKU, or tag…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <select
+            className="input"
+            value={collectionId ?? ''}
+            onChange={(e) => setCollectionId(e.target.value === '' ? null : Number(e.target.value))}
+            style={{ width: 220 }}
+          >
+            <option value="">all collections</option>
+            {(collections.data ?? []).map((c) => (
+              <option key={c.id} value={c.id}>{c.name} ({c.itemCount})</option>
+            ))}
+          </select>
+          <CollectionsButton onSaved={() => collections.reload()} />
 
-        {selected.size > 0 && (
-          <>
-            <label className="text-[11px] text-[var(--ink-500)] mono uppercase tracking-wider">
-              copies
-              <input
-                type="number" min={1} max={50} value={copies}
-                onChange={(e) => setCopies(Math.max(1, Number(e.target.value) || 1))}
-                className="input mono ml-2" style={{ width: 60 }}
+          {selected.size > 0 && (
+            <>
+              <div style={{ flex: 1 }} />
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{
+                  fontSize: 'var(--t-xs)', color: 'var(--text-mute)',
+                  textTransform: 'uppercase', letterSpacing: '0.08em',
+                }}>copies</span>
+                <input
+                  type="number" min={1} max={50} value={copies}
+                  onChange={(e) => setCopies(Math.max(1, Number(e.target.value) || 1))}
+                  className="input input--num" style={{ width: 60 }}
+                />
+              </div>
+              <Button variant="primary" onClick={printSelected} disabled={printMut.loading} leading={<Printer size={12} weight="bold" />}>
+                {printMut.loading ? 'Printing…' : `Print ${selected.size} label${selected.size > 1 ? 's' : ''}`}
+              </Button>
+              <button
+                onClick={() => setSelected(new Set())}
+                aria-label="clear selection"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-mute)', padding: 4,
+                }}
+              ><X size={12} /></button>
+            </>
+          )}
+        </div>
+
+        {printMut.error && <InlineAlert message={printMut.error} onDismiss={printMut.clearError} />}
+        {grid.error && <InlineAlert message={grid.error} onDismiss={() => grid.reload()} />}
+
+        {/* grid */}
+        {grid.loading ? <Progress /> : (grid.data?.length ?? 0) === 0 ? (
+          <Empty mark="case" title={q || collectionId ? 'No items match the filter' : 'Empty catalog'}>
+            {q || collectionId
+              ? 'Try a different search or collection.'
+              : 'Add items and photos to build your catalog.'}
+          </Empty>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+              gap: 'var(--s3)',
+            }}
+          >
+            {(grid.data ?? []).map((it) => (
+              <CatalogCard
+                key={it.id}
+                row={it}
+                selected={selected.has(it.id)}
+                onToggle={() => toggleSel(it.id)}
+                onOpen={() => setDetailId(it.id)}
               />
-            </label>
-            <button className="btn-primary" onClick={printSelected} disabled={printMut.loading}>
-              {printMut.loading ? <Spinner label="printing" /> : (
-                <><Printer size={12} weight="bold" /> Print {selected.size} label{selected.size > 1 ? 's' : ''}</>
-              )}
-            </button>
-            <button className="btn-ghost" onClick={() => setSelected(new Set())} aria-label="clear">
-              <X size={12} />
-            </button>
-          </>
+            ))}
+          </div>
+        )}
+
+        {detailId && (
+          <ItemDetailModal
+            itemId={detailId}
+            onClose={() => { setDetailId(null); grid.reload(); }}
+            collections={collections.data ?? []}
+          />
         )}
       </div>
-
-      {printMut.error && <ErrorBanner message={printMut.error} onDismiss={printMut.clearError} />}
-      {grid.error && <ErrorBanner message={grid.error} onDismiss={() => grid.reload()} />}
-
-      {/* grid */}
-      {grid.loading ? <LoadingBlock label="loading catalog…" /> : (grid.data?.length ?? 0) === 0 ? (
-        <EmptyState hint={q || collectionId ? 'no items match the filter' : 'add items and photos to build your catalog'}>
-          empty catalog
-        </EmptyState>
-      ) : (
-        <div
-          className="grid gap-3"
-          style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}
-        >
-          {(grid.data ?? []).map((it) => (
-            <CatalogCard
-              key={it.id}
-              row={it}
-              selected={selected.has(it.id)}
-              onToggle={() => toggleSel(it.id)}
-              onOpen={() => setDetailId(it.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      {detailId && (
-        <ItemDetailModal
-          itemId={detailId}
-          onClose={() => { setDetailId(null); grid.reload(); }}
-          collections={collections.data ?? []}
-        />
-      )}
     </div>
   );
 }
+
+/* ---------------------------- Card ---------------------------- */
 
 function CatalogCard({ row, selected, onToggle, onOpen }: {
   row: GridRow; selected: boolean; onToggle: () => void; onOpen: () => void;
 }) {
   return (
     <div
-      className="card"
+      onClick={onOpen}
       style={{
-        padding: 0,
+        background: 'var(--surface)',
+        border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+        borderRadius: 'var(--radius-2)',
         overflow: 'hidden',
         cursor: 'pointer',
-        borderColor: selected ? 'var(--gold-500)' : 'var(--rule)',
-        boxShadow: selected ? 'inset 0 0 0 1px var(--gold-500)' : 'none',
+        transition: 'border-color var(--motion-quick) var(--ease-out)',
       }}
-      onClick={onOpen}
     >
-      <div
-        style={{
-          position: 'relative',
-          aspectRatio: '1 / 1',
-          background: 'var(--paper-3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
+      <div style={{
+        position: 'relative',
+        aspectRatio: '1 / 1',
+        background: 'var(--surface-hi)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
         {row.primaryPhoto ? (
           <img
             src={`photo://${row.primaryPhoto}`}
@@ -160,47 +184,56 @@ function CatalogCard({ row, selected, onToggle, onOpen }: {
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
         ) : (
-          <ImageSquare size={40} weight="thin" color="var(--ink-300)" />
+          <ImageSquare size={40} weight="thin" color="var(--border-strong)" />
         )}
         <button
           onClick={(e) => { e.stopPropagation(); onToggle(); }}
-          className="mono"
+          aria-label="select for label print"
           style={{
             position: 'absolute', top: 6, left: 6,
             width: 20, height: 20, borderRadius: 3,
-            border: '1px solid ' + (selected ? 'var(--gold-500)' : 'var(--rule-ink)'),
-            background: selected ? 'var(--gold-500)' : 'rgba(255,255,255,0.85)',
-            color: selected ? 'var(--paper)' : 'var(--ink-500)',
+            border: '1px solid ' + (selected ? 'var(--accent)' : 'var(--border-strong)'),
+            background: selected ? 'var(--accent)' : 'rgba(255,255,255,0.85)',
+            color: selected ? 'var(--accent-fg)' : 'var(--text-mute)',
+            fontFamily: 'var(--font-mono)',
             fontSize: 12, lineHeight: 1, cursor: 'pointer',
           }}
-          aria-label="select for label print"
         >
           {selected ? '✓' : ''}
         </button>
         {row.photoCount > 1 && (
-          <span className="mono" style={{
+          <span style={{
             position: 'absolute', bottom: 6, right: 6,
-            background: 'rgba(20,16,14,0.75)', color: 'var(--paper)',
-            padding: '1px 6px', borderRadius: 2, fontSize: 10,
+            background: 'rgba(20,18,16,0.75)', color: '#FFFDF7',
+            padding: '1px 6px', borderRadius: 2,
+            fontFamily: 'var(--font-mono)', fontSize: 10,
           }}>{row.photoCount} photos</span>
         )}
       </div>
       <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ fontWeight: 500, fontSize: 13 }} className="truncate">{row.name}</div>
-        <div className="mono text-[11px] text-[var(--ink-500)]">{row.sku}</div>
-        <div className="flex items-center gap-1 flex-wrap">
-          <CategoryBadge category={row.category} stamp={row.stamp} />
-        </div>
-        <div className="text-[11px] text-[var(--ink-500)] mono">
-          {row.unit === 'pcs' ? `${row.stockQty} pcs` : row.unit === 'carat' ? fmtCarat(row.stockWtMg) : fmtGrams(row.stockWtMg)}
+        <div style={{
+          fontWeight: 500, fontSize: 'var(--t-base)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{row.name}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--text-mute)' }}>{row.sku}</div>
+        <div><CategoryBadge category={row.category} stamp={row.stamp} /></div>
+        <div style={{ fontSize: 'var(--t-xs)', color: 'var(--text-mute)', fontFamily: 'var(--font-mono)' }}>
+          {row.unit === 'pcs'
+            ? <><Num value={row.stockQty} /> pcs</>
+            : <Weight mg={row.stockWtMg} unit={row.unit === 'carat' ? 'ct' : 'g'} />}
         </div>
         {row.collectionNames && (
-          <div className="text-[10px] text-[var(--ink-500)] italic truncate">{row.collectionNames}</div>
+          <div style={{
+            fontSize: 10, color: 'var(--text-mute)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{row.collectionNames}</div>
         )}
       </div>
     </div>
   );
 }
+
+/* ---------------------- Collections dialog -------------------- */
 
 function CollectionsButton({ onSaved }: { onSaved: () => void }) {
   const [open, setOpen] = useState(false);
@@ -220,34 +253,42 @@ function CollectionsButton({ onSaved }: { onSaved: () => void }) {
 
   return (
     <>
-      <button className="btn" onClick={() => setOpen(true)}>
-        <Plus size={12} weight="bold" /> Collections
-      </button>
+      <Button onClick={() => setOpen(true)} leading={<Plus size={12} weight="bold" />}>
+        Collections
+      </Button>
       {open && (
         <Modal title="Collections" onClose={() => setOpen(false)}>
-          <div className="flex gap-2 mb-3">
-            <input className="input flex-1" placeholder="new collection name" value={name} onChange={(e) => setName(e.target.value)}
-                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
-            <button className="btn-primary" onClick={add} disabled={create.loading}>
-              {create.loading ? <Spinner /> : 'Add'}
-            </button>
+          <div style={{ display: 'flex', gap: 'var(--s2)', marginBottom: 'var(--s3)' }}>
+            <input
+              className="input"
+              style={{ flex: 1 }}
+              placeholder="new collection name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+            />
+            <Button variant="primary" onClick={add} disabled={create.loading}>
+              {create.loading ? 'Adding…' : 'Add'}
+            </Button>
           </div>
-          {create.error && <ErrorBanner message={create.error} onDismiss={create.clearError} />}
-          {del.error && <ErrorBanner message={del.error} onDismiss={del.clearError} />}
-          {list.loading ? <LoadingBlock /> : (
-            <table className="ledger-table">
-              <thead><tr><th>Name</th><th className="text-right">Items</th><th></th></tr></thead>
+          {create.error && <InlineAlert message={create.error} onDismiss={create.clearError} />}
+          {del.error    && <InlineAlert message={del.error}    onDismiss={del.clearError} />}
+          {list.loading ? <Progress /> : (
+            <table className="table">
+              <thead><tr><th>Name</th><th className="num" style={{ width: 70 }}>Items</th><th style={{ width: 80 }} /></tr></thead>
               <tbody>
                 {(list.data ?? []).map((c) => (
                   <tr key={c.id}>
                     <td>{c.name}</td>
-                    <td className="num">{c.itemCount}</td>
-                    <td className="text-right">
-                      <button className="link text-danger" onClick={() => remove(c.id)}>delete</button>
+                    <td className="num"><Num value={c.itemCount} /></td>
+                    <td className="num">
+                      <Button variant="link" onClick={() => remove(c.id)} style={{ color: 'var(--neg)' }}>delete</Button>
                     </td>
                   </tr>
                 ))}
-                {(list.data?.length ?? 0) === 0 && <tr><td colSpan={3}><EmptyState>no collections yet</EmptyState></td></tr>}
+                {(list.data?.length ?? 0) === 0 && (
+                  <tr><td colSpan={3} style={{ padding: 'var(--s4)' }}><Empty title="No collections yet" /></td></tr>
+                )}
               </tbody>
             </table>
           )}
@@ -256,6 +297,8 @@ function CollectionsButton({ onSaved }: { onSaved: () => void }) {
     </>
   );
 }
+
+/* ---------------------- Item detail modal --------------------- */
 
 function ItemDetailModal({ itemId, onClose, collections }: {
   itemId: number; onClose: () => void; collections: Collection[];
@@ -267,9 +310,9 @@ function ItemDetailModal({ itemId, onClose, collections }: {
 
   const addPhoto = useMutation<any, any>((p) => invoke(CH.photosAdd, p));
   const delPhoto = useMutation<number, any>((id) => invoke(CH.photosDelete, { id }));
-  const setPrim = useMutation<number, any>((id) => invoke(CH.photosSetPrimary, { id }));
-  const setTags = useMutation<any, any>((p) => invoke(CH.itemTagsSet, p));
-  const setCols = useMutation<any, any>((p) => invoke(CH.itemCollectionsSet, p));
+  const setPrim  = useMutation<number, any>((id) => invoke(CH.photosSetPrimary, { id }));
+  const setTags  = useMutation<any, any>((p) => invoke(CH.itemTagsSet, p));
+  const setCols  = useMutation<any, any>((p) => invoke(CH.itemCollectionsSet, p));
 
   const [tags, setTagsState] = useState<string>('');
   const [cols, setColsState] = useState<Set<number>>(new Set());
@@ -277,16 +320,12 @@ function ItemDetailModal({ itemId, onClose, collections }: {
   useEffect(() => { if (item?.tags !== undefined) setTagsState(item.tags); }, [item?.tags]);
   useEffect(() => { setColsState(new Set((itemCols.data ?? []).map((c) => c.id))); }, [itemCols.data]);
 
-  async function onAdd() {
-    try { await addPhoto.run({ itemId }); await photos.reload(); } catch { /* surfaced */ }
-  }
+  async function onAdd()        { try { await addPhoto.run({ itemId }); await photos.reload(); } catch { /* surfaced */ } }
   async function onDel(id: number) {
     if (!confirm('Delete this photo?')) return;
     try { await delPhoto.run(id); await photos.reload(); } catch { /* surfaced */ }
   }
-  async function onSetPrim(id: number) {
-    try { await setPrim.run(id); await photos.reload(); } catch { /* surfaced */ }
-  }
+  async function onSetPrim(id: number) { try { await setPrim.run(id); await photos.reload(); } catch { /* surfaced */ } }
   async function saveMeta() {
     try {
       await setTags.run({ itemId, tags });
@@ -297,56 +336,81 @@ function ItemDetailModal({ itemId, onClose, collections }: {
 
   return (
     <Modal title={item?.name ?? 'Item'} onClose={onClose} wide>
-      {items.loading || !item ? <LoadingBlock /> : (
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
+      {items.loading || !item ? <Progress /> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s4)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s3)' }}>
             <CategoryBadge category={item.category} stamp={item.stamp} size="md" />
-            <span className="mono text-xs text-[var(--ink-500)]">{item.sku}</span>
-            <span className="text-xs text-[var(--ink-500)]">
-              {item.unit === 'pcs' ? `${item.stockQty} pcs` : item.unit === 'carat' ? fmtCarat(item.stockWtMg) : fmtGrams(item.stockWtMg)}
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>{item.sku}</span>
+            <span style={{ fontSize: 'var(--t-sm)' }}>
+              {item.unit === 'pcs'
+                ? <><Num value={item.stockQty} /> pcs</>
+                : <Weight mg={item.stockWtMg} unit={item.unit === 'carat' ? 'ct' : 'g'} />}
             </span>
           </div>
 
           <div>
-            <div className="section-label mb-2">— photos ————————</div>
-            {photos.loading ? <LoadingBlock /> : (
-              <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))' }}>
+            <SectionLabel>Photos</SectionLabel>
+            {photos.loading ? <Progress /> : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                gap: 'var(--s2)',
+              }}>
                 {(photos.data ?? []).map((p) => (
-                  <div key={p.id} className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
-                    <div style={{ aspectRatio: '1 / 1', background: 'var(--paper-3)' }}>
+                  <div key={p.id} style={{
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-1)',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{ aspectRatio: '1 / 1', background: 'var(--surface-hi)' }}>
                       <img src={`photo://${p.filename}`} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
-                    <div className="flex items-center justify-between px-2 py-1 border-t border-[var(--rule)]">
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '4px 8px', borderTop: '1px solid var(--border)',
+                      fontSize: 10,
+                    }}>
                       {p.position === 0 ? (
-                        <span className="text-[10px] mono uppercase tracking-wider text-[var(--gold-700)]">primary</span>
+                        <span style={{
+                          fontFamily: 'var(--font-mono)', color: 'var(--accent-press)',
+                          textTransform: 'uppercase', letterSpacing: '0.08em',
+                        }}>primary</span>
                       ) : (
-                        <button className="link text-[10px]" onClick={() => onSetPrim(p.id)}>make primary</button>
+                        <Button variant="link" onClick={() => onSetPrim(p.id)} style={{ fontSize: 10 }}>make primary</Button>
                       )}
-                      <button className="link text-danger text-[10px]" onClick={() => onDel(p.id)}>delete</button>
+                      <Button variant="link" onClick={() => onDel(p.id)} style={{ fontSize: 10, color: 'var(--neg)' }}>delete</Button>
                     </div>
                   </div>
                 ))}
                 <button
-                  className="card flex items-center justify-center"
-                  style={{ aspectRatio: '1 / 1', padding: 0, cursor: 'pointer', flexDirection: 'column', gap: 6 }}
                   onClick={onAdd}
                   disabled={addPhoto.loading}
+                  style={{
+                    background: 'var(--surface)',
+                    border: '1px dashed var(--border-strong)',
+                    borderRadius: 'var(--radius-1)',
+                    aspectRatio: '1 / 1',
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    gap: 6, cursor: 'pointer',
+                    color: 'var(--text-mute)', fontSize: 'var(--t-xs)',
+                  }}
                 >
                   {addPhoto.loading
-                    ? <Spinner label="uploading" />
-                    : <><Plus size={22} weight="regular" color="var(--ink-500)" />
-                        <span className="text-[11px] text-[var(--ink-500)]">add photo</span></>}
+                    ? 'Uploading…'
+                    : <><Plus size={22} weight="regular" /><span>add photo</span></>}
                 </button>
               </div>
             )}
-            {addPhoto.error && <ErrorBanner message={addPhoto.error} onDismiss={addPhoto.clearError} />}
-            {delPhoto.error && <ErrorBanner message={delPhoto.error} onDismiss={delPhoto.clearError} />}
+            {addPhoto.error && <InlineAlert message={addPhoto.error} onDismiss={addPhoto.clearError} />}
+            {delPhoto.error && <InlineAlert message={delPhoto.error} onDismiss={delPhoto.clearError} />}
           </div>
 
           <div>
-            <div className="section-label mb-2">— tags ————————————</div>
-            <input
-              className="input w-full"
+            <SectionLabel>Tags</SectionLabel>
+            <Field
+              label=""
               placeholder="ring, wedding, bridal, floral (comma-separated)"
               value={tags}
               onChange={(e) => setTagsState(e.target.value)}
@@ -354,10 +418,10 @@ function ItemDetailModal({ itemId, onClose, collections }: {
           </div>
 
           <div>
-            <div className="section-label mb-2">— collections ———————</div>
-            <div className="flex flex-wrap gap-2">
+            <SectionLabel>Collections</SectionLabel>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--s2)' }}>
               {collections.length === 0 && (
-                <span className="text-xs text-[var(--ink-500)]">
+                <span style={{ fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>
                   No collections yet — close and click "Collections" to create some.
                 </span>
               )}
@@ -371,13 +435,14 @@ function ItemDetailModal({ itemId, onClose, collections }: {
                       if (on) n.delete(c.id); else n.add(c.id);
                       setColsState(n);
                     }}
-                    className="mono"
                     style={{
-                      padding: '3px 10px', borderRadius: 3,
-                      border: '1px solid ' + (on ? 'var(--gold-500)' : 'var(--rule)'),
-                      background: on ? 'rgba(184,137,46,0.12)' : 'transparent',
-                      color: on ? 'var(--gold-700)' : 'var(--ink-700)',
-                      fontSize: 11, cursor: 'pointer',
+                      padding: '3px 10px',
+                      borderRadius: 10,
+                      border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
+                      background: on ? 'color-mix(in oklab, var(--gold-500) 12%, transparent)' : 'transparent',
+                      color: on ? 'var(--accent-press)' : 'var(--text-mute)',
+                      fontSize: 'var(--t-sm)',
+                      cursor: 'pointer',
                     }}
                   >
                     {c.name}
@@ -387,20 +452,22 @@ function ItemDetailModal({ itemId, onClose, collections }: {
             </div>
           </div>
 
-          {setTags.error && <ErrorBanner message={setTags.error} onDismiss={setTags.clearError} />}
-          {setCols.error && <ErrorBanner message={setCols.error} onDismiss={setCols.clearError} />}
+          {setTags.error && <InlineAlert message={setTags.error} onDismiss={setTags.clearError} />}
+          {setCols.error && <InlineAlert message={setCols.error} onDismiss={setCols.clearError} />}
 
-          <div className="flex gap-2">
-            <button className="btn-primary" onClick={saveMeta} disabled={setTags.loading || setCols.loading}>
-              {setTags.loading || setCols.loading ? <Spinner label="saving" /> : 'Save & close'}
-            </button>
-            <button className="btn" onClick={onClose}>Close without saving</button>
+          <div style={{ display: 'flex', gap: 'var(--s2)' }}>
+            <Button variant="primary" onClick={saveMeta} disabled={setTags.loading || setCols.loading}>
+              {setTags.loading || setCols.loading ? 'Saving…' : 'Save & close'}
+            </Button>
+            <Button onClick={onClose}>Close without saving</Button>
           </div>
         </div>
       )}
     </Modal>
   );
 }
+
+/* ------------------------- small bits ------------------------- */
 
 function Modal({ title, onClose, wide, children }: {
   title: string; onClose: () => void; wide?: boolean; children: React.ReactNode;
@@ -409,24 +476,56 @@ function Modal({ title, onClose, wide, children }: {
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(20,16,14,0.4)',
+        position: 'fixed', inset: 0,
+        background: 'var(--scrim)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
         paddingTop: 60, zIndex: 100,
       }}
     >
       <div
+        className="ds-v2"
         onClick={(e) => e.stopPropagation()}
-        className="card"
-        style={{ maxWidth: wide ? 820 : 520, width: '95%', maxHeight: '85vh', overflow: 'auto' }}
+        style={{
+          maxWidth: wide ? 820 : 520, width: '95%', maxHeight: '85vh', overflow: 'auto',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-2)',
+          padding: 'var(--s4)',
+          outline: '2px solid var(--focus-ring)',
+        }}
       >
-        <div className="flex items-center justify-between mb-3">
-          <span className="screen-title" style={{ fontSize: 20 }}>{title}</span>
-          <button onClick={onClose} className="btn-ghost" style={{ padding: 4, height: 24 }} aria-label="close">
-            <X size={12} />
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--s3)' }}>
+          <span style={{ fontSize: 'var(--t-lg)', fontWeight: 600 }}>{title}</span>
+          <button
+            onClick={onClose}
+            aria-label="close"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-mute)', padding: 4,
+            }}
+          ><X size={14} /></button>
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 'var(--t-sm)', color: 'var(--text-mute)',
+      textTransform: 'uppercase', letterSpacing: '0.04em',
+      marginBottom: 'var(--s2)',
+    }}>{children}</div>
+  );
+}
+
+function InlineAlert({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="alert">
+      <span style={{ whiteSpace: 'pre-wrap' }}>{message}</span>
+      {onDismiss && <button className="alert__dismiss" onClick={onDismiss} aria-label="dismiss">×</button>}
     </div>
   );
 }

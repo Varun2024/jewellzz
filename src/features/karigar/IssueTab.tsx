@@ -1,13 +1,16 @@
+/* Issue slip — ported to v2 primitives. */
+
 import { useState } from 'react';
 import { CH, invoke } from '@/lib/ipc';
 import { useAsync, useMutation } from '@/lib/useAsync';
-import { fmtGrams, gramsToMg, caratToMg } from '@/lib/format';
-import { ErrorBanner, LoadingBlock, EmptyState, Spinner } from '@/components/Status';
+import { gramsToMg, caratToMg } from '@/lib/format';
 import type { Karigar } from '@shared/ipc';
+import {
+  Sheet, Button, Field, Weight, Pill, Progress, Empty,
+} from '@/components/ui';
 
 type Cat = 'gold' | 'silver' | 'stone' | 'artificial';
 type Line = { key: string; category: Cat; stamp: string; weight: number; unit: 'g' | 'ct'; note: string };
-
 const CATEGORIES: Cat[] = ['gold', 'silver', 'stone', 'artificial'];
 
 export function IssueTab() {
@@ -19,6 +22,7 @@ export function IssueTab() {
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
   const [err, setErr] = useState('');
+  const [lastOk, setLastOk] = useState('');
   const post = useMutation<any, { id: number; slipNo: string }>((p) => invoke(CH.karigarIssuePost, p));
 
   function addLine() {
@@ -27,14 +31,12 @@ export function IssueTab() {
   function upd(k: string, patch: Partial<Line>) {
     setLines((ls) => ls.map((l) => l.key === k ? { ...l, ...patch } : l));
   }
-  function del(k: string) {
-    setLines((ls) => ls.filter((l) => l.key !== k));
-  }
+  function del(k: string) { setLines((ls) => ls.filter((l) => l.key !== k)); }
 
   async function submit() {
     setErr(''); post.clearError();
-    if (!karigarId) return setErr('pick a karigar');
-    if (lines.length === 0) return setErr('add at least one line');
+    if (!karigarId)           return setErr('pick a karigar');
+    if (lines.length === 0)   return setErr('add at least one line');
     if (lines.some((l) => l.weight <= 0)) return setErr('every line needs a positive weight');
     try {
       const payload = {
@@ -49,117 +51,177 @@ export function IssueTab() {
       const r = await post.run(payload);
       setLines([]); setPurpose(''); setNotes('');
       await issues.reload();
-      setErr(''); setLastOk(`issued ${r.slipNo}`);
-    } catch { /* surfaced via post.error */ }
+      setLastOk(`issued ${r.slipNo}`);
+    } catch { /* surfaced */ }
   }
 
-  const [lastOk, setLastOk] = useState('');
-
   return (
-    <div className="grid grid-cols-2 gap-6">
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium">New issue slip</h3>
-        {karigars.error && <ErrorBanner message={karigars.error} onDismiss={() => karigars.reload()} />}
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs text-muted">Karigar
-            <select className="input w-full" value={karigarId ?? ''} onChange={(e) => setKarigarId(Number(e.target.value) || null)} disabled={karigars.loading}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s4)' }}>
+
+      <Sheet title="New issue slip">
+        {karigars.error && <InlineAlert message={karigars.error} onDismiss={() => karigars.reload()} />}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+          <div className="field">
+            <label className="field__label">Karigar</label>
+            <select
+              className="input"
+              value={karigarId ?? ''}
+              onChange={(e) => setKarigarId(Number(e.target.value) || null)}
+              disabled={karigars.loading}
+            >
               <option value="">{karigars.loading ? 'loading…' : '— pick —'}</option>
               {(karigars.data ?? []).map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
             </select>
-          </label>
-          <label className="text-xs text-muted">Purpose
-            <input className="input w-full" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="ring casting, chain repair…" />
-          </label>
+          </div>
+          <Field label="Purpose" value={purpose}
+                 onChange={(e) => setPurpose(e.target.value)}
+                 placeholder="ring casting, chain repair…" />
         </div>
 
-        <div className="flex justify-between items-center">
-          <div className="text-xs text-muted">metal lines</div>
-          <button type="button" className="btn text-xs" onClick={addLine}>+ add line</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s2)' }}>
+          <div style={{
+            fontSize: 'var(--t-sm)', color: 'var(--text-mute)',
+            textTransform: 'uppercase', letterSpacing: '0.04em',
+          }}>Metal lines</div>
+          <Button type="button" onClick={addLine}>+ add line</Button>
         </div>
 
-        <table className="w-full text-xs">
-          <thead className="text-muted border-b border-border">
+        <table className="table" style={{ marginBottom: 'var(--s3)' }}>
+          <thead>
             <tr>
-              <th className="text-left py-1">Category</th>
-              <th className="text-left">Stamp</th>
-              <th className="text-right">Weight</th>
-              <th className="text-left">Unit</th>
-              <th className="text-left">Note</th>
-              <th></th>
+              <th>Category</th>
+              <th style={{ width: 80 }}>Stamp</th>
+              <th className="num" style={{ width: 100 }}>Weight</th>
+              <th style={{ width: 60 }}>Unit</th>
+              <th>Note</th>
+              <th style={{ width: 28 }} />
             </tr>
           </thead>
           <tbody>
             {lines.map((l) => (
-              <tr key={l.key} className="border-b border-border/50">
+              <tr key={l.key}>
                 <td>
-                  <select className="input" value={l.category} onChange={(e) => upd(l.key, { category: e.target.value as Cat })}>
+                  <select
+                    className="input"
+                    style={{ height: 24, fontSize: 'var(--t-sm)' }}
+                    value={l.category}
+                    onChange={(e) => upd(l.key, { category: e.target.value as Cat })}
+                  >
                     {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </td>
                 <td>
-                  <input className="input w-20 mono" value={l.stamp} onChange={(e) => upd(l.key, { stamp: e.target.value })}
-                         disabled={l.category !== 'gold' && l.category !== 'silver'} placeholder="—" />
+                  <input
+                    className="input"
+                    style={{ height: 24, width: 60, fontFamily: 'var(--font-mono)' }}
+                    value={l.stamp}
+                    onChange={(e) => upd(l.key, { stamp: e.target.value })}
+                    disabled={l.category !== 'gold' && l.category !== 'silver'}
+                    placeholder="—"
+                  />
                 </td>
-                <td className="text-right">
-                  <input className="input w-24 text-right mono" type="number" step="0.001"
-                         value={l.weight} onChange={(e) => upd(l.key, { weight: Number(e.target.value) || 0 })} />
+                <td className="num">
+                  <input
+                    className="input input--num"
+                    style={{ width: 90, height: 24 }}
+                    type="number" step="0.001"
+                    value={l.weight}
+                    onChange={(e) => upd(l.key, { weight: Number(e.target.value) || 0 })}
+                  />
                 </td>
                 <td>
-                  <select className="input" value={l.unit} onChange={(e) => upd(l.key, { unit: e.target.value as any })}>
+                  <select
+                    className="input"
+                    style={{ height: 24, width: 50, fontSize: 'var(--t-sm)' }}
+                    value={l.unit}
+                    onChange={(e) => upd(l.key, { unit: e.target.value as 'g' | 'ct' })}
+                  >
                     <option value="g">g</option><option value="ct">ct</option>
                   </select>
                 </td>
-                <td><input className="input" value={l.note} onChange={(e) => upd(l.key, { note: e.target.value })} /></td>
-                <td className="text-right"><button className="link text-danger" onClick={() => del(l.key)}>×</button></td>
+                <td>
+                  <input
+                    className="input"
+                    style={{ height: 24 }}
+                    value={l.note}
+                    onChange={(e) => upd(l.key, { note: e.target.value })}
+                  />
+                </td>
+                <td className="num">
+                  <button
+                    onClick={() => del(l.key)}
+                    aria-label="remove"
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: 'var(--text-faint)', fontSize: 16, lineHeight: 1,
+                    }}
+                  >×</button>
+                </td>
               </tr>
             ))}
-            {lines.length === 0 && <tr><td colSpan={6}><EmptyState>no lines — add one</EmptyState></td></tr>}
+            {lines.length === 0 && (
+              <tr><td colSpan={6} style={{ padding: 'var(--s4)' }}><Empty title="No lines — add one" /></td></tr>
+            )}
           </tbody>
         </table>
 
-        <label className="text-xs text-muted flex flex-col gap-1">Notes
-          <input className="input w-full" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </label>
+        <Field label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
 
-        <div className="flex gap-2 items-center">
-          <button className="btn-primary" onClick={submit} disabled={post.loading}>
-            {post.loading ? <Spinner label="posting…" /> : 'Post issue slip'}
-          </button>
-          {err && <ErrorBanner message={err} onDismiss={() => setErr('')} />}
-          {post.error && <ErrorBanner message={post.error} onDismiss={post.clearError} />}
-          {lastOk && !err && !post.error && <div className="text-success text-xs">{lastOk}</div>}
+        <div style={{ display: 'flex', gap: 'var(--s2)', alignItems: 'center', marginTop: 'var(--s3)', flexWrap: 'wrap' }}>
+          <Button variant="primary" onClick={submit} disabled={post.loading}>
+            {post.loading ? 'Posting…' : 'Post issue slip'}
+          </Button>
+          {err && <InlineAlert message={err} onDismiss={() => setErr('')} />}
+          {post.error && <InlineAlert message={post.error} onDismiss={post.clearError} />}
+          {lastOk && !err && !post.error && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Pill tone="pos">issued</Pill>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>{lastOk}</span>
+            </span>
+          )}
         </div>
-      </div>
+      </Sheet>
 
-      <div>
-        <h3 className="text-sm font-medium mb-2">Recent issues</h3>
-        {issues.error && <ErrorBanner message={issues.error} onDismiss={() => issues.reload()} />}
-        {issues.loading ? <LoadingBlock label="loading…" /> : (
-          <table className="w-full text-xs">
-            <thead className="text-muted border-b border-border">
-              <tr>
-                <th className="text-left py-1">Slip</th>
-                <th className="text-left">When</th>
-                <th className="text-left">Karigar</th>
-                <th className="text-right">Weight</th>
-                <th className="text-left">Purpose</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(issues.data ?? []).map((i) => (
-                <tr key={i.id} className="border-b border-border/50">
-                  <td className="py-1 mono">{i.slipNo}</td>
-                  <td className="mono">{new Date(i.ts * 1000).toLocaleString('en-IN')}</td>
-                  <td>{i.karigarName}</td>
-                  <td className="text-right mono">{fmtGrams(i.totalMg ?? 0)}</td>
-                  <td className="text-muted">{i.purpose}</td>
+      <Sheet title="Recent issues" flush>
+        {issues.error && <div style={{ padding: 12 }}><InlineAlert message={issues.error} onDismiss={() => issues.reload()} /></div>}
+        {issues.loading ? <div style={{ padding: 12 }}><Progress /></div>
+          : (issues.data?.length ?? 0) === 0 ? <Empty mark="ledger" title="No issues yet" />
+          : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 100 }}>Slip</th>
+                  <th style={{ width: 150 }}>When</th>
+                  <th>Karigar</th>
+                  <th className="num" style={{ width: 110 }}>Weight</th>
+                  <th>Purpose</th>
                 </tr>
-              ))}
-              {(issues.data?.length ?? 0) === 0 && <tr><td colSpan={5}><EmptyState>no issues yet</EmptyState></td></tr>}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </thead>
+              <tbody>
+                {(issues.data ?? []).map((i) => (
+                  <tr key={i.id}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)' }}>{i.slipNo}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>
+                      {new Date(i.ts * 1000).toLocaleString('en-IN')}
+                    </td>
+                    <td>{i.karigarName}</td>
+                    <td className="num"><Weight mg={i.totalMg ?? 0} /></td>
+                    <td style={{ fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>{i.purpose}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </Sheet>
+    </div>
+  );
+}
+
+function InlineAlert({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="alert">
+      <span style={{ whiteSpace: 'pre-wrap' }}>{message}</span>
+      {onDismiss && <button className="alert__dismiss" onClick={onDismiss} aria-label="dismiss">×</button>}
     </div>
   );
 }

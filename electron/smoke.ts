@@ -250,12 +250,27 @@ export async function runSmokeTest(): Promise<{ steps: SmokeStep[]; passed: numb
   });
 
   await step('metal ledger: gold-22k credited 10g, debited 2g old-gold, silver-925 credited 20g, stone credited 0.5ct(=100mg)', () => {
-    const g = db.prepare(`SELECT SUM(credit_mg) c, SUM(debit_mg) d FROM metal_ledger WHERE category='gold' AND stamp='22k' AND ref_id=?`).get(saleId) as any;
+    // ref_id in metal_ledger is scoped by ref_type (sale.id and purchase.id can
+    // coincidentally share a value — both tables autoincrement independently).
+    // Filter by ref_type IN (sale rows) so we only see the current sale's movements.
+    const g = db.prepare(
+      `SELECT SUM(credit_mg) c, SUM(debit_mg) d FROM metal_ledger
+       WHERE category='gold' AND stamp='22k'
+         AND ref_id=? AND ref_type IN ('sale','sale-old-gold')`,
+    ).get(saleId) as any;
     if (g.c !== 10000) throw new Error(`gold out ${g.c}, expected 10000`);
     if (g.d !== 2000) throw new Error(`gold in ${g.d}, expected 2000`);
-    const s = db.prepare(`SELECT SUM(credit_mg) c FROM metal_ledger WHERE category='silver' AND stamp='925' AND ref_id=?`).get(saleId) as any;
+    const s = db.prepare(
+      `SELECT SUM(credit_mg) c FROM metal_ledger
+       WHERE category='silver' AND stamp='925'
+         AND ref_id=? AND ref_type IN ('sale','sale-old-gold')`,
+    ).get(saleId) as any;
     if (s.c !== 20000) throw new Error(`silver out ${s.c}, expected 20000`);
-    const st = db.prepare(`SELECT SUM(credit_mg) c FROM metal_ledger WHERE category='stone' AND ref_id=?`).get(saleId) as any;
+    const st = db.prepare(
+      `SELECT SUM(credit_mg) c FROM metal_ledger
+       WHERE category='stone'
+         AND ref_id=? AND ref_type IN ('sale','sale-old-gold')`,
+    ).get(saleId) as any;
     if (st.c !== 100) throw new Error(`stone out ${st.c}, expected 100`);
     return 'all buckets correct';
   });

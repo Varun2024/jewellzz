@@ -1,11 +1,16 @@
+/* Orders — custom commission. Ported to v2 primitives. */
+
 import { useState } from 'react';
 import { Plus } from '@phosphor-icons/react';
 import { CH, invoke } from '@/lib/ipc';
 import { useAsync, useMutation } from '@/lib/useAsync';
-import { fmtPaise, rupeesToPaise } from '@/lib/format';
-import { ErrorBanner, LoadingBlock, EmptyState, Spinner } from '@/components/Status';
+import { rupeesToPaise } from '@/lib/format';
 import type { Party, Karigar } from '@shared/ipc';
 import { StatusChip, fmtDate } from './shared';
+import {
+  Sheet, Button, Field, Rupee, Progress, Empty,
+} from '@/components/ui';
+import { useHotkey } from '@/lib/useHotkey';
 
 export function OrdersTab() {
   const list = useAsync<any[]>(() => invoke(CH.ordersList, {}));
@@ -30,8 +35,8 @@ export function OrdersTab() {
 
   async function submit() {
     setErr(''); post.clearError();
-    if (!partyId) return setErr('pick a party');
-    if (!spec.trim()) return setErr('spec required');
+    if (!partyId)        return setErr('pick a party');
+    if (!spec.trim())    return setErr('spec required');
     try {
       await post.run({
         partyId, spec,
@@ -57,125 +62,165 @@ export function OrdersTab() {
     } catch { /* surfaced */ }
   }
 
-  if (list.error) return <ErrorBanner message={list.error} onDismiss={() => list.reload()} />;
+  useHotkey('n', () => setShowForm(true), !showForm && !advRow);
+  useHotkey('Escape', () => { setShowForm(false); setAdvRow(null); }, showForm || !!advRow);
+
+  if (list.error) return <InlineAlert message={list.error} onDismiss={() => list.reload()} />;
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <p className="text-sm text-[var(--ink-500)]">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s4)' }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--s3)',
+        padding: 'var(--s3)',
+        background: 'var(--surface-hi)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-1)',
+      }}>
+        <div style={{ fontSize: 'var(--t-sm)', color: 'var(--text-mute)' }}>
           Customer places an order → advance received → karigar assigned → ready → delivered. Advance writes cash ledger + party credit.
-        </p>
+        </div>
         {!showForm && (
-          <button className="btn-primary" onClick={() => setShowForm(true)}>
-            <Plus size={12} weight="bold" /> New order
-          </button>
+          <Button variant="primary" kbd="N" onClick={() => setShowForm(true)} leading={<Plus size={12} weight="bold" />}>
+            New order
+          </Button>
         )}
       </div>
 
       {showForm && (
-        <div className="card space-y-3">
-          <div className="section-label">— new order slip ———————</div>
-          <div className="grid grid-cols-3 gap-3">
-            <label className="text-xs text-[var(--ink-500)]">Party
-              <select className="input w-full" value={partyId ?? ''} onChange={(e) => setPartyId(Number(e.target.value) || null)}>
+        <Sheet title="New order slip">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+            <div className="field">
+              <label className="field__label">Party</label>
+              <select className="input" value={partyId ?? ''} onChange={(e) => setPartyId(Number(e.target.value) || null)}>
                 <option value="">— pick —</option>
                 {(parties.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Estimated total (₹)
-              <input type="number" step="0.01" className="input w-full mono" value={estimated}
-                     onChange={(e) => setEstimated(Number(e.target.value) || 0)} />
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Promised delivery
-              <input type="date" className="input w-full" value={promised} onChange={(e) => setPromised(e.target.value)} />
-            </label>
+            </div>
+            <Field label="Estimated total (₹)" numeric type="number" step="0.01" value={estimated}
+                   onChange={(e) => setEstimated(Number(e.target.value) || 0)} />
+            <Field label="Promised delivery" type="date" value={promised}
+                   onChange={(e) => setPromised(e.target.value)} />
           </div>
-          <label className="text-xs text-[var(--ink-500)] block">Spec / description
-            <input required className="input w-full" placeholder="e.g. 22k gold ring, 8g, size 7, floral engraving"
-                   value={spec} onChange={(e) => setSpec(e.target.value)} />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-xs text-[var(--ink-500)]">Assign karigar (optional)
-              <select className="input w-full" value={karigarId ?? ''} onChange={(e) => setKarigarId(Number(e.target.value) || null)}>
+
+          <div style={{ marginBottom: 'var(--s3)' }}>
+            <Field
+              label="Spec / description"
+              required
+              placeholder="e.g. 22k gold ring, 8g, size 7, floral engraving"
+              value={spec}
+              onChange={(e) => setSpec(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s3)', marginBottom: 'var(--s3)' }}>
+            <div className="field">
+              <label className="field__label">Assign karigar (optional)</label>
+              <select className="input" value={karigarId ?? ''} onChange={(e) => setKarigarId(Number(e.target.value) || null)}>
                 <option value="">— none —</option>
                 {(karigars.data ?? []).map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
               </select>
-            </label>
-            <label className="text-xs text-[var(--ink-500)]">Notes
-              <input className="input w-full" value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </label>
+            </div>
+            <Field label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
-          <div className="flex gap-2 items-center">
-            <button className="btn-primary" onClick={submit} disabled={post.loading}>
-              {post.loading ? <Spinner label="posting" /> : 'Post order'}
-            </button>
-            <button className="btn" onClick={() => setShowForm(false)}>Cancel</button>
-            {err && <ErrorBanner message={err} onDismiss={() => setErr('')} />}
-            {post.error && <ErrorBanner message={post.error} onDismiss={post.clearError} />}
+
+          <div style={{ display: 'flex', gap: 'var(--s2)', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button variant="primary" onClick={submit} disabled={post.loading}>
+              {post.loading ? 'Posting…' : 'Post order'}
+            </Button>
+            <Button onClick={() => setShowForm(false)}>Cancel</Button>
+            {err && <InlineAlert message={err} onDismiss={() => setErr('')} />}
+            {post.error && <InlineAlert message={post.error} onDismiss={post.clearError} />}
           </div>
-        </div>
+        </Sheet>
       )}
 
-      {statusMut.error && <ErrorBanner message={statusMut.error} onDismiss={statusMut.clearError} />}
-      {advance.error && <ErrorBanner message={advance.error} onDismiss={advance.clearError} />}
+      {statusMut.error && <InlineAlert message={statusMut.error} onDismiss={statusMut.clearError} />}
+      {advance.error && <InlineAlert message={advance.error} onDismiss={advance.clearError} />}
 
       {advRow && (
-        <div className="card space-y-3" style={{ borderColor: 'var(--gold-500)' }}>
-          <div className="section-label">— advance for {advRow.slipNo} ———</div>
-          <div className="text-sm">
-            <div className="text-[var(--ink-500)]">Estimated <span className="mono text-[var(--ink-950)]">{fmtPaise(advRow.estimatedPaise)}</span></div>
-            <div className="text-[var(--ink-500)]">Advance so far <span className="mono text-[var(--ink-950)]">{fmtPaise(advRow.advancePaise)}</span></div>
+        <Sheet title={`Advance for ${advRow.slipNo}`} style={{ borderColor: 'var(--accent)' }}>
+          <div style={{ fontSize: 'var(--t-sm)', marginBottom: 'var(--s3)' }}>
+            <div style={{ color: 'var(--text-mute)' }}>
+              Estimated · <Rupee paise={advRow.estimatedPaise} />
+            </div>
+            <div style={{ color: 'var(--text-mute)' }}>
+              Advance so far · <Rupee paise={advRow.advancePaise} />
+            </div>
           </div>
-          <label className="text-xs text-[var(--ink-500)] block">Additional advance (₹)
-            <input type="number" step="0.01" autoFocus className="input w-full mono" value={advAmount}
-                   onChange={(e) => setAdvAmount(Number(e.target.value) || 0)} />
-          </label>
-          <div className="flex gap-2 items-center">
-            <button className="btn-primary" onClick={submitAdvance} disabled={advance.loading}>
-              {advance.loading ? <Spinner label="posting" /> : 'Receive advance'}
-            </button>
-            <button className="btn" onClick={() => { setAdvRow(null); setAdvAmount(0); }}>Cancel</button>
+          <div style={{ marginBottom: 'var(--s3)' }}>
+            <Field
+              label="Additional advance (₹)"
+              autoFocus
+              numeric type="number" step="0.01"
+              value={advAmount}
+              onChange={(e) => setAdvAmount(Number(e.target.value) || 0)}
+            />
           </div>
-        </div>
+          <div style={{ display: 'flex', gap: 'var(--s2)' }}>
+            <Button variant="primary" onClick={submitAdvance} disabled={advance.loading}>
+              {advance.loading ? 'Posting…' : 'Receive advance'}
+            </Button>
+            <Button onClick={() => { setAdvRow(null); setAdvAmount(0); }}>Cancel</Button>
+          </div>
+        </Sheet>
       )}
 
-      {list.loading ? <LoadingBlock label="loading orders…" /> : (
-        <table className="ledger-table">
-          <thead><tr>
-            <th>Slip</th><th>Date</th><th>Party</th><th>Spec</th>
-            <th>Karigar</th><th>Promised</th>
-            <th className="text-right">Est.</th><th className="text-right">Adv.</th>
-            <th>Status</th><th></th>
-          </tr></thead>
-          <tbody>
-            {(list.data ?? []).map((o) => (
-              <tr key={o.id}>
-                <td className="mono">{o.slipNo}</td>
-                <td className="mono text-[11px] text-[var(--ink-500)]">{fmtDate(o.ts)}</td>
-                <td>{o.partyName}</td>
-                <td style={{ maxWidth: 180 }} className="truncate">{o.spec}</td>
-                <td className="text-[var(--ink-500)]">{o.karigarName ?? '—'}</td>
-                <td className="mono text-[11px] text-[var(--ink-500)]">{o.promisedDate || '—'}</td>
-                <td className="num">{fmtPaise(o.estimatedPaise)}</td>
-                <td className="num">{fmtPaise(o.advancePaise)}</td>
-                <td><StatusChip status={o.status} /></td>
-                <td className="text-right">
-                  {o.status !== 'delivered' && o.status !== 'cancelled' && (
-                    <div className="flex gap-1 justify-end items-center flex-wrap">
-                      <button className="link" onClick={() => setAdvRow(o)}>advance</button>
-                      <span className="text-[var(--ink-300)]">·</span>
-                      {o.status === 'open' && <button className="link" onClick={() => moveStatus(o.id, 'in_progress')}>start</button>}
-                      {o.status === 'in_progress' && <button className="link" onClick={() => moveStatus(o.id, 'ready')}>ready</button>}
-                      {o.status === 'ready' && <button className="link" onClick={() => moveStatus(o.id, 'delivered')}>delivered</button>}
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {(list.data?.length ?? 0) === 0 && <tr><td colSpan={10}><EmptyState hint="Create an order when a customer commissions a new piece">no orders yet</EmptyState></td></tr>}
-          </tbody>
-        </table>
-      )}
+      <Sheet title="Orders" flush>
+        {list.loading ? <div style={{ padding: 12 }}><Progress /></div>
+          : (list.data?.length ?? 0) === 0 ? <Empty mark="bell" title="No orders yet">Create one when a customer commissions a new piece.</Empty>
+          : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 100 }}>Slip</th>
+                  <th style={{ width: 90 }}>Date</th>
+                  <th style={{ width: 140 }}>Party</th>
+                  <th>Spec</th>
+                  <th style={{ width: 110 }}>Karigar</th>
+                  <th style={{ width: 100 }}>Promised</th>
+                  <th className="num" style={{ width: 120 }}>Est.</th>
+                  <th className="num" style={{ width: 120 }}>Adv.</th>
+                  <th style={{ width: 110 }}>Status</th>
+                  <th style={{ width: 220 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {(list.data ?? []).map((o) => (
+                  <tr key={o.id}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)' }}>{o.slipNo}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--text-mute)' }}>{fmtDate(o.ts)}</td>
+                    <td>{o.partyName}</td>
+                    <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.spec}</td>
+                    <td style={{ color: 'var(--text-mute)', fontSize: 'var(--t-sm)' }}>{o.karigarName ?? '—'}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-xs)', color: 'var(--text-mute)' }}>{o.promisedDate || '—'}</td>
+                    <td className="num"><Rupee paise={o.estimatedPaise} /></td>
+                    <td className="num"><Rupee paise={o.advancePaise} /></td>
+                    <td><StatusChip status={o.status} /></td>
+                    <td className="num">
+                      {o.status !== 'delivered' && o.status !== 'cancelled' && (
+                        <div style={{ display: 'inline-flex', gap: 'var(--s2)' }}>
+                          <Button variant="link" onClick={() => setAdvRow(o)}>advance</Button>
+                          {o.status === 'open'        && <Button variant="link" onClick={() => moveStatus(o.id, 'in_progress')}>start</Button>}
+                          {o.status === 'in_progress' && <Button variant="link" onClick={() => moveStatus(o.id, 'ready')}>ready</Button>}
+                          {o.status === 'ready'       && <Button variant="link" onClick={() => moveStatus(o.id, 'delivered')}>delivered</Button>}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </Sheet>
+    </div>
+  );
+}
+
+function InlineAlert({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return (
+    <div className="alert">
+      <span style={{ whiteSpace: 'pre-wrap' }}>{message}</span>
+      {onDismiss && <button className="alert__dismiss" onClick={onDismiss} aria-label="dismiss">×</button>}
     </div>
   );
 }
